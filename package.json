@@ -1,5 +1,5 @@
 {
-  "name": "rete-vue-plugin",
+  "name": "rete-lit-plugin",
   "version": "2.0.3",
   "description": "",
   "scripts": {
@@ -7,7 +7,7 @@
     "lint": "rete lint",
     "doc": "rete doc"
   },
-  "author": "Vitaliy Stoliarov",
+  "author": "Ryan Bennett",
   "license": "MIT",
   "keywords": [
     "vue",
@@ -18,25 +18,21 @@
   "homepage": "https://retejs.org",
   "repository": {
     "type": "git",
-    "url": "https://github.com/retejs/vue-plugin.git"
+    "url": "https://github.com/rynomad/rete-lit-plugin.git"
   },
   "bugs": {
-    "url": "https://github.com/retejs/vue-plugin/issues"
+    "url": "https://github.com/rynomad/rete-lit-plugin/issues"
   },
   "peerDependencies": {
     "rete": "^2.0.1",
     "rete-area-plugin": "^2.0.0",
-    "rete-render-utils": "^2.0.0",
-    "vue": "^2.6 || ^3.2"
+    "rete-render-utils": "^2.0.0"
   },
   "devDependencies": {
     "@babel/plugin-proposal-class-properties": "^7.18.6",
     "@babel/plugin-proposal-decorators": "^7.22.10",
     "@babel/plugin-transform-typescript": "^7.22.10",
     "@rollup/plugin-replace": "^5.0.2",
-    "@vitejs/plugin-vue": "^4.1.0",
-    "@vitejs/plugin-vue2": "^2.2.0",
-    "@vue/compiler-sfc": "^3.2.22",
     "rete": "^2.0.1",
     "rete-area-plugin": "^2.0.0",
     "rete-cli": "^1.0.1",
@@ -49,21 +45,10 @@
     "rollup-plugin-scss": "^3.0.0",
     "rollup-plugin-styles": "^4.0.0",
     "sass": "^1.56.0",
-    "vite": "^4.1.1",
-    "vue": "^2.7.14",
-    "vue-template-compiler": "^2.7.14",
-    "vue3": "npm:vue@^3.2.47"
-  },
-  "overrides": {
-    "@vitejs/plugin-vue": {
-      "vue": "^2"
-    }
+    "vite": "^4.1.1"
   },
   "dependencies": {
     "@babel/runtime": "^7.21.0",
-    "fast-equals": "^5.0.1",
-    "json-schema-faker": "^0.5.3",
-    "lit": "^2.8.0",
-    "rxjs": "^7.8.1"
+    "fast-equals": "^5.0.1"
   }
 }
