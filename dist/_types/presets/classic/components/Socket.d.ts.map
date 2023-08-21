@@ -1,0 +1,1 @@
+{"version":3,"file":"Socket.d.ts","sourceRoot":"","sources":["../../../../../src/presets/classic/components/Socket.ts"],"names":[],"mappings":"AAAA,OAAO,EAAa,UAAU,EAAE,MAAM,KAAK,CAAA;AAE3C,OAAO,EAAE,aAAa,EAAE,MAAM,MAAM,CAAA;AAIpC,qBACa,MAAO,SAAQ,UAAU;IACQ,IAAI,EACxC,aAAa,CAAC,MAAM,GACpB,SAAS,CAAA;IAEf,MAAM,CAAC,MAAM,4BA6BZ;IAGD,WAAW;IAKX,MAAM;CAST"}

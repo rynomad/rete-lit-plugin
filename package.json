@@ -1,0 +1,69 @@
+{
+  "name": "rete-vue-plugin",
+  "version": "2.0.3",
+  "description": "",
+  "scripts": {
+    "build": "rete build -c rete.config.ts",
+    "lint": "rete lint",
+    "doc": "rete doc"
+  },
+  "author": "Vitaliy Stoliarov",
+  "license": "MIT",
+  "keywords": [
+    "vue",
+    "vuejs",
+    "rete",
+    "Rete.js"
+  ],
+  "homepage": "https://retejs.org",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/retejs/vue-plugin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/retejs/vue-plugin/issues"
+  },
+  "peerDependencies": {
+    "rete": "^2.0.1",
+    "rete-area-plugin": "^2.0.0",
+    "rete-render-utils": "^2.0.0",
+    "vue": "^2.6 || ^3.2"
+  },
+  "devDependencies": {
+    "@babel/plugin-proposal-class-properties": "^7.18.6",
+    "@babel/plugin-proposal-decorators": "^7.22.10",
+    "@babel/plugin-transform-typescript": "^7.22.10",
+    "@rollup/plugin-replace": "^5.0.2",
+    "@vitejs/plugin-vue": "^4.1.0",
+    "@vitejs/plugin-vue2": "^2.2.0",
+    "@vue/compiler-sfc": "^3.2.22",
+    "rete": "^2.0.1",
+    "rete-area-plugin": "^2.0.0",
+    "rete-cli": "^1.0.1",
+    "rete-render-utils": "^2.0.0",
+    "rollup-plugin-commonjs": "^9.2.2",
+    "rollup-plugin-css-only": "^4.3.0",
+    "rollup-plugin-lit-css": "^4.0.1",
+    "rollup-plugin-pug": "1.1.1",
+    "rollup-plugin-sass": "1.12.16",
+    "rollup-plugin-scss": "^3.0.0",
+    "rollup-plugin-styles": "^4.0.0",
+    "sass": "^1.56.0",
+    "vite": "^4.1.1",
+    "vue": "^2.7.14",
+    "vue-template-compiler": "^2.7.14",
+    "vue3": "npm:vue@^3.2.47"
+  },
+  "overrides": {
+    "@vitejs/plugin-vue": {
+      "vue": "^2"
+    }
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.21.0",
+    "fast-equals": "^5.0.1",
+    "json-schema-faker": "^0.5.3",
+    "lit": "^2.8.0",
+    "rxjs": "^7.8.1"
+  }
+}

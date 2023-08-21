@@ -1,0 +1,10 @@
+{
+    "compilerOptions": {
+        "strict": true,
+        "experimentalDecorators": true,
+        "lib": ["DOM"],
+        "target": "ES2019",
+        "moduleResolution": "Node"
+    },
+    "include": ["src"]
+}
