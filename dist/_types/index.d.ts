@@ -3,8 +3,6 @@ import { RenderPreset } from './presets/types';
 import { Renderer } from './renderer';
 import { Position, RenderSignal } from './types';
 export * as Presets from './presets';
-export { Transformer } from './presets/classic/components/Transformer';
-export { TransformerNode } from './presets/classic/components/TransformerNode';
 export type { ClassicScheme, LitArea2D } from './presets/classic/types';
 export type { RenderPreset } from './presets/types';
 export { RefElement as Ref } from './Ref';

@@ -4,6 +4,7 @@ type Instance<P> = { app: LitElement; payload: P }
 
 function setProps(element: LitElement, payload: Record<string, any>) {
   for (const key of Object.keys(payload)) {
+    if (key === 'style') continue
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     element[key] = payload[key]
