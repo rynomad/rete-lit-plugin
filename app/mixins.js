@@ -1,4 +1,4 @@
-import {dedupeMixin} from 'https://esm.sh/@open-wc/dedupe-mixin'
+import { dedupeMixin } from "https://esm.sh/@open-wc/dedupe-mixin";
 import { css, LitElement, html } from "https://esm.sh/lit";
 
 export const PropagationStopper = dedupeMixin(
