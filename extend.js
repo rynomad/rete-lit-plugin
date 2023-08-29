@@ -2013,7 +2013,7 @@ export async function createEditor(container) {
         
         area.addPipe(context => {
             if (context.type === 'noderesize') {
-                areaSubject.next(true)
+                // areaSubject.next(true)
             }
             return context;
         })
