@@ -23,7 +23,7 @@ export class CanvasView {
     setupSubscriptions() {
         this.canvas.area.addPipe((context) => {
             if (context.type === "noderesize") {
-                this.arrangeObserver.next(Math.random());
+                // this.arrangeObserver.next(Math.random());
             }
             return context;
         });

@@ -2,6 +2,7 @@ import {
     BehaviorSubject,
     distinctUntilChanged,
     filter,
+    tap,
 } from "https://esm.sh/rxjs@7.3.0";
 import deepEqual from "https://esm.sh/fast-deep-equal";
 
@@ -10,12 +11,14 @@ export class SafeSubject {
         // Initialize write and _read Behavior Subjects
         this.write = new BehaviorSubject(undefined);
         this._read = new BehaviorSubject(undefined);
+        this._filter = filter;
 
         // Pipe write subject through filters and then to _read subject
         this.write
             .pipe(
                 this.filter, // Filter out null and undefined values
-                distinctUntilChanged(deepEqual)
+                distinctUntilChanged(deepEqual),
+                tap(() => console.log("safe subject spam"))
             )
             .subscribe(
                 (value) => this._read.next(value),
@@ -26,7 +29,7 @@ export class SafeSubject {
 
     // Define a read getter to provide the _read subject piped with a filter
     get read() {
-        return this.filter ? this._read : this._read.pipe(this.filter);
+        return this._filter ? this._read.pipe(this.filter) : this._read;
     }
 
     // Define a filter getter to provide the filter function

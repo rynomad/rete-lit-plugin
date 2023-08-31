@@ -34,12 +34,16 @@ import { CanvasStore } from "./canvas-store.js";
 import { CanvasView } from "./canvas-view.js";
 
 export class Canvas {
-    constructor({ id, name } = {}) {
-        this.id = id || this.generateGUID();
+    constructor(ide, { canvasId, name } = {}) {
+        console.log("new canvas spam");
+        this.ide = ide;
+        this.canvasId = canvasId || this.generateGUID();
         this.name = name || "New Canvas";
+        this.store = new CanvasStore(this);
+        this.snapshots = this.store.snapshots;
         this.container = null;
+        this.editor = new NodeEditor();
     }
-
     generateGUID() {
         return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
             /[xy]/g,
@@ -52,36 +56,25 @@ export class Canvas {
     }
 
     async createEditor(container) {
-        const editor = (this.editor = new NodeEditor());
+        const editor = this.editor;
         const area = (this.area = new AreaPlugin(container));
-        this.store = new CanvasStore(this);
 
         const litRender = new LitPlugin();
 
         const contextMenu = new ContextMenuPlugin({
-            items: ContextMenuPresets.classic.setup([
-                ["OpenAI", () => new OpenAITransformer(editor, area)],
-                ["Prompt", () => new PromptTransformer(editor, area)],
-            ]),
+            items: ContextMenuPresets.classic.setup([]),
         });
         const minimap = new MinimapPlugin();
         const reroutePlugin = new ReroutePlugin();
-        const dock = new DockPlugin();
         const connection = new ConnectionPlugin();
         connection.addPreset(ConnectionPresets.classic.setup());
-        dock.addPreset(
-            DockPresets.classic.setup({ area, size: 100, scale: 0.6 })
-        );
 
         editor.use(area);
 
         area.use(litRender);
         area.use(contextMenu);
         area.use(minimap);
-        area.use(dock);
         area.use(connection);
-        dock.add(() => new OpenAITransformer(editor, area));
-        dock.add(() => new PromptTransformer(editor, area));
         litRender.use(reroutePlugin);
 
         litRender.addPreset(
@@ -130,7 +123,8 @@ export class Canvas {
     }
 
     async initialize() {
-        this.createEditor(this.container);
+        await this.createEditor(this.container);
+        this.store.initEditorPipe();
     }
 
     setupArrange() {
@@ -163,8 +157,8 @@ export class Canvas {
         this.applier = new ArrangeAppliers.TransitionApplier({
             duration: 500,
             timingFunction: (t) => t,
-            async onTick() {
-                await AreaExtensions.zoomAt(area, editor.getNodes());
+            onTick: async () => {
+                await AreaExtensions.zoomAt(this.area, this.editor.getNodes());
             },
         });
     }
@@ -174,12 +168,12 @@ export class Canvas {
             applier: this.applier,
             options: { "elk.direction": "DOWN" },
         }); // Include your existing code for arranging layout here.
-        AreaExtensions.zoomAt(area, editor.getNodes());
+        AreaExtensions.zoomAt(this.area, this.editor.getNodes());
     }
 
-    attach(container) {
+    async attach(container) {
         this.container = container;
-        this.initialize();
+        await this.initialize();
     }
 
     destroy() {

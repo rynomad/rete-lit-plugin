@@ -7,24 +7,76 @@ import {
 } from "https://esm.sh/rxjs@7.3.0";
 import { openDB } from "https://esm.sh/idb@6.0.0";
 import { deepEqual } from "https://esm.sh/fast-equals";
+import { Transformer } from "./transformer.js";
+import { SafeSubject } from "./safe-subject.js";
 
 export class CanvasStore {
     static db = "bespeak-canvas-db";
+    static storeName = "metadata-store";
+
+    static async getAllMetadata() {
+        const db = await this.getDB();
+        const tx = db.transaction(this.storeName, "readonly");
+        const store = tx.objectStore(this.storeName);
+        const keys = await store.getAllKeys();
+        const allMetadata = await Promise.all(
+            keys.map((key) => store.get(key))
+        );
+        await tx.done;
+        await db.close();
+        return allMetadata;
+    }
+
+    get editor() {
+        return this.canvas.editor;
+    }
+
+    get area() {
+        return this.canvas.area;
+    }
+
     constructor(canvas) {
         this.canvas = canvas;
-        this.editor = canvas.editor;
-        this.area = canvas.area;
-        this.storeName = `bespeak-canvas-${canvas.id}`;
+        this.storeName = canvas.canvasId;
+        this.ide = canvas.ide;
+
         this.lock = new BehaviorSubject(false);
         this.historyOffset = new BehaviorSubject(0);
+        this.db = this.constructor.db;
+        this.getDB = this.constructor.getDB.bind(this);
+        this.snapshots = new SafeSubject(true);
 
         // Initialize the state manager
         this.init();
     }
 
     async init() {
+        console.log("init spam");
         // Create pipeline for editor events to snapshot
-        this.editor.addPipe(async (context) => {
+        this.initEditorPipe();
+        // Create pipeline for loading snapshot from IndexedDB to editor
+
+        this.historyOffset
+            .pipe(
+                tap((h) => console.log("offset changed", h)),
+                mergeMap(this.loadSnapshotFromDB.bind(this)),
+                distinctUntilChanged(deepEqual),
+                filter((snapshot) => snapshot && !this.lock.getValue()),
+                tap(() => this.lock.next(true)),
+                mergeMap(this.updateEditorFromSnapshot.bind(this)),
+                tap(() => this.lock.next(false)),
+                tap(() => console.log("SPAM?"))
+            )
+            .subscribe(this.snapshots.write);
+
+        await this.setMetadata({
+            canvasId: this.canvas.canvasId,
+            name: this.canvas.name,
+        });
+    }
+
+    initEditorPipe() {
+        this.editor?.addPipe(async (context) => {
             if (
                 [
                     "nodecreated",
@@ -34,51 +86,76 @@ export class CanvasStore {
                 ].includes(context.type)
             ) {
                 if (!this.lock.getValue()) {
+                    console.log("editor spam?");
                     const nodes = this.editor
                         .getNodes()
                         .map((node) => node.serialize());
                     const connections = this.editor.getConnections();
                     await this.saveSnapshotToDB({ nodes, connections });
                 }
-
-                await this.deleteSnapshotsAfterOffset();
                 this.historyOffset.next(0);
+
+                // await this.deleteSnapshotsAfterOffset();
             }
             return context;
         });
-
-        // Create pipeline for loading snapshot from IndexedDB to editor
-        this.historyOffset
-            .pipe(
-                mergeMap(this.loadSnapshotFromDB.bind(this)),
-                distinctUntilChanged(deepEqual),
-                filter((snapshot) => snapshot && !this.lock.getValue()),
-                tap(() => this.lock.next(true)),
-                mergeMap(this.updateEditorFromSnapshot.bind(this)),
-                tap(() => this.lock.next(false))
-            )
-            .subscribe();
     }
 
-    async getDB() {
+    async setMetadata(metadata) {
+        // Remove non-serializable properties
+        const serializableMetadata = {
+            canvasId: metadata.canvasId,
+            name: metadata.name,
+        };
+
+        const db = await this.getDB();
+        const tx = db.transaction(this.constructor.storeName, "readwrite");
+        const store = tx.objectStore(this.constructor.storeName);
+        try {
+            await store.put(serializableMetadata, this.canvas.canvasId);
+        } catch (e) {
+            console.error("Failed to save metadata:", e);
+        }
+        await tx.done;
+        await db.close();
+    }
+
+    async getMetadata() {
+        const db = await this.getDB();
+        const tx = db.transaction(this.constructor.storeName, "readonly");
+        const store = tx.objectStore(this.constructor.storeName);
+        const metadata = await store.get(this.canvas.canvasId);
+        await tx.done;
+        await db.close();
+        return metadata;
+    }
+
+    static async getDB() {
         let db;
 
         // Open the database without specifying a version to get the current version
-        db = await openDB(this.constructor.db);
+        db = await openDB(this.db);
         let dbVersion = db.version;
 
-        if (!db.objectStoreNames.contains(this.storeName)) {
-            // Close the database so it can be reopened with a higher version number
+        const storesToCreate = [
+            this.storeName,
+            this.constructor.storeName,
+        ].filter((e) => e);
+        const newStores = storesToCreate.filter(
+            (storeName) => !db.objectStoreNames.contains(storeName)
+        );
+
+        if (newStores.length) {
             db.close();
 
-            // Increment the version number
             dbVersion++;
 
-            // Reopen the database with a higher version number and create the store
-            db = await openDB(this.constructor.db, dbVersion, {
+            db = await openDB(this.db, dbVersion, {
                 upgrade: (db) => {
-                    db.createObjectStore(this.storeName, {
-                        autoIncrement: true,
+                    newStores.forEach((storeName) => {
+                        db.createObjectStore(storeName, {
+                            autoIncrement: true,
+                        });
                     });
                 },
             });
@@ -128,7 +205,6 @@ export class CanvasStore {
     }
 
     async loadSnapshotFromDB(offset) {
-        const subject = new BehaviorSubject(null);
         const db = await this.getDB();
         let cursor = await db
             .transaction(this.storeName)
@@ -187,7 +263,7 @@ export class CanvasStore {
             snapshot.nodes.map(async (node) => {
                 if (!currentNodes.find((n) => n.id === node.id)) {
                     await this.editor.addNode(
-                        Transformer.deserialize(node, this.editor, this.area)
+                        Transformer.deserialize(this.ide, node)
                     );
                 }
             })
@@ -200,6 +276,8 @@ export class CanvasStore {
                 }
             })
         );
+
+        return snapshot;
     }
 }
 

@@ -18,7 +18,7 @@ import "./form.js";
 
 const socket = new Classic.Socket("socket");
 
-class TransformerInput extends Classic.Input {
+export class TransformerInput extends Classic.Input {
     constructor(inputConfig) {
         super(
             inputConfig.socket,
@@ -32,7 +32,7 @@ class TransformerInput extends Classic.Input {
     }
 }
 
-class TransformerOutput extends Classic.Output {
+export class TransformerOutput extends Classic.Output {
     constructor(inputConfig) {
         super(
             inputConfig.socket,
@@ -397,11 +397,6 @@ export class TransformerNode extends LitPresets.classic.Node {
                     if (this.allowStyleChange || newValue === "") {
                         return;
                     }
-
-                    console.warn(
-                        "Changing the style attribute is not allowed."
-                    );
-
                     // Set flag to indicate internal change
                     this.allowStyleChange = true;
 
@@ -443,6 +438,7 @@ export class TransformerNode extends LitPresets.classic.Node {
 
         if (this.data.component) {
             this.appendChild(this.data.component);
+            this.data.setNode(this);
         }
     }
 
@@ -662,6 +658,26 @@ class DefaultComponent extends LitElement {
 }
 
 customElements.define("transformer-default-component", DefaultComponent);
+
+function isClassConstructor(variable) {
+    if (typeof variable !== "function") return false;
+
+    // Check if it's an ES6 class constructor
+    const isES6Class = /^class\s/.test(variable.toString());
+
+    if (isES6Class) return true;
+
+    // Check for older, ES5-style constructors using prototype
+    if (
+        variable.prototype &&
+        variable.prototype.constructor === variable &&
+        Object.getOwnPropertyNames(variable.prototype).includes("constructor")
+    ) {
+        return true;
+    }
+
+    return false;
+}
 export class Transformer extends Classic.Node {
     static socket = socket;
     static inputs = [];
@@ -669,7 +685,7 @@ export class Transformer extends Classic.Node {
     static intermediates = [];
     static Component = DefaultComponent;
     static childClasses = new Map();
-    static deserialize(data, editor, area) {
+    static deserialize(ide, data) {
         // Retrieve the child class constructor based on the class name
         const ChildClass = Transformer.childClasses.get(data.className);
 
@@ -677,7 +693,7 @@ export class Transformer extends Classic.Node {
             throw new Error(`Unknown class: ${data.className}`);
         }
 
-        const transformer = new ChildClass(editor, area);
+        const transformer = new ChildClass(ide, data.canvasId, data.props);
         transformer.id = data.id;
 
         for (const key in data.inputs) {
@@ -692,7 +708,14 @@ export class Transformer extends Classic.Node {
     inputs = {};
     outputs = {};
     intermediates = {};
-    editor;
+
+    get editor() {
+        return this.ide.getCanvasById(this.canvasId)?.editor;
+    }
+
+    get area() {
+        return this.ide.getCanvasById(this.canvasId).area;
+    }
 
     get width() {
         return this.component.parentElement
@@ -706,10 +729,20 @@ export class Transformer extends Classic.Node {
             : 0;
     }
 
-    constructor(name, editor, area) {
-        console.log("construct transfromer", name);
+    constructor(ide, canvasId, dataOrConstructor = {}) {
+        const name = isClassConstructor(dataOrConstructor)
+            ? dataOrConstructor.toString().match(/\w+/g)[1]
+            : dataOrConstructor.name || dataOrConstructor.className;
+
         super(name);
-        this.name = name;
+        this.ide = ide;
+        this.canvasId = canvasId;
+        this.props = isClassConstructor(dataOrConstructor)
+            ? {}
+            : dataOrConstructor;
+        if (!isClassConstructor(dataOrConstructor)) {
+            this.id = dataOrConstructor.id || this.id;
+        }
 
         const className = this.constructor.toString().match(/\w+/g)[1];
 
@@ -718,8 +751,11 @@ export class Transformer extends Classic.Node {
             Transformer.childClasses.set(className, this.constructor);
         }
 
-        this.area = area;
-        this.editor = editor;
+        this.init();
+        this.postInit();
+    }
+
+    init() {
         this.processIO(
             this.constructor.inputs,
             false,
@@ -732,12 +768,19 @@ export class Transformer extends Classic.Node {
         );
         this.processIntermediates(this.constructor.intermediates);
         this.transform();
+    }
+
+    async postInit() {
         //   debugger
         if (this.constructor.Component) {
             this.component = new this.constructor.Component();
             this.component.inputs = this.inputs;
             this.component.outputs = this.outputs;
             this.component.intermediates = this.intermediates;
+        }
+
+        while (!this.editor) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
         }
 
         this.editor.addPipe((context) => {
@@ -771,6 +814,10 @@ export class Transformer extends Classic.Node {
             className: this.constructor.toString().match(/\w+/g)[1],
             inputs: serializedInputs,
             id: this.id,
+            name: this.name,
+            props: this.props,
+            canvasId: this.canvasId,
+
             // Add any other properties you want to serialize
         };
     }
@@ -807,14 +854,18 @@ export class Transformer extends Classic.Node {
         }
     }
 
+    setNode(node) {
+        this.node = node;
+    }
+
     transform() {
         // To be overridden by child class
     }
 
-    subscribe(context) {
+    subscribe(context, node) {
         if (context.target !== this.id) return;
 
-        const sourceNode = this.editor.getNode(context.source);
+        const sourceNode = node || this.editor.getNode(context.source);
         const sourceOutput = sourceNode.outputs[context.sourceOutput];
         const targetInput = this.inputs[context.targetInput];
 

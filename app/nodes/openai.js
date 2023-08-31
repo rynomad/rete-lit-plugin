@@ -185,8 +185,8 @@ export class OpenAITransformer extends Transformer {
         },
     ];
 
-    constructor(editor, area) {
-        super("OpenAI", editor, area);
+    constructor(ide, canvasId, data = OpenAITransformer) {
+        super(ide, canvasId, data);
     }
 
     async transform() {
@@ -316,8 +316,8 @@ export class PromptTransformer extends Transformer {
         },
     ];
 
-    constructor(editor, area) {
-        super("Prompt", editor, area);
+    constructor(ide, canvasId, data = PromptTransformer) {
+        super(ide, canvasId, data);
     }
 
     transform() {
@@ -343,3 +343,12 @@ export class PromptTransformer extends Transformer {
             .subscribe(this.outputs.chat.subject);
     }
 }
+
+Transformer.childClasses.set(
+    OpenAITransformer.toString().match(/\w+/g)[1],
+    OpenAITransformer
+);
+Transformer.childClasses.set(
+    PromptTransformer.toString().match(/\w+/g)[1],
+    PromptTransformer
+);
