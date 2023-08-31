@@ -134,14 +134,24 @@ export class CompositeTransformer extends Transformer {
         }
     }
 
-    removeInput(hash, input) {
-        this.removeConnections(hash);
+    addInput(hash, input) {
+        input.hash = hash;
         super.addInput(hash, input);
     }
 
-    removeOutput(hash, output) {
-        this.removeConnections(hash);
+    addOutput(hash, output) {
+        output.hash = hash;
         super.addOutput(hash, output);
+    }
+
+    removeInput(hash) {
+        this.removeConnections(hash);
+        super.removeInput(hash, input);
+    }
+
+    removeOutput(hash) {
+        this.removeConnections(hash);
+        super.removeOutput(hash);
     }
 
     removeConnections(hash) {

@@ -22,7 +22,7 @@ export class TransformerInput extends Classic.Input {
     constructor(inputConfig) {
         super(
             inputConfig.socket,
-            inputConfig.label,
+            inputConfig.hash || inputConfig.label,
             inputConfig.multipleConnections
         );
 
@@ -587,13 +587,14 @@ export class TransformerNode extends LitPresets.classic.Node {
                             (input) => html`
                                 <div
                                     class="socket-column"
-                                    data-testid="input-${input.label}">
+                                    data-testid="input-${input.hash ||
+                                    input.label}">
                                     <ref-element
                                         class="input-socket"
                                         .data=${{
                                             type: "socket",
                                             side: "input",
-                                            key: input.label,
+                                            key: input.hash || input.label,
                                             nodeId: this.data?.id,
                                             payload: input.socket,
                                         }}
@@ -790,7 +791,7 @@ export class Transformer extends Classic.Node {
                     try {
                         this.subscribe(context.data);
                     } catch (error) {
-                        alert(error.message);
+                        debugger; //alert(error.message);
                         this.editor.removeConnection(context.data.id);
                     }
                 } else if (context.type === "connectionremoved") {

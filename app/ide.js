@@ -51,7 +51,13 @@ class CanvasLitElement extends LitElement {
             .draggable-pill {
                 display: flex;
                 align-items: center;
+                position: relative;
+                transition: background-color 0.3s ease-in-out; /* add a transition for background-color */
             }
+            .draggable-pill.selected {
+                background-color: cornflowerblue; /* pale blue background for selected canvas */
+            }
+
             .draggable-pill.disabled {
                 opacity: 0.5;
                 cursor: not-allowed;
@@ -69,6 +75,20 @@ class CanvasLitElement extends LitElement {
                 text-align: center;
                 line-height: 30px;
                 margin: 5px auto;
+                cursor: pointer;
+            }
+            .edit-icon {
+                position: absolute; /* Absolute positioning inside the input */
+                right: 20px; /* 5 pixels from the right edge */
+                top: 50%; /* Centered vertically */
+                transform: translateY(
+                    -50%
+                ); /* Ensure it is perfectly centered */
+                font-size: 0.8em; /* Make the icon smaller */
+                cursor: pointer; /* Make it obvious the user can interact with the icon */
+            }
+
+            .selector {
                 cursor: pointer;
             }
         `;
@@ -91,7 +111,7 @@ class CanvasLitElement extends LitElement {
 
     async connectedCallback() {
         super.connectedCallback();
-        this.canvasList = (await CanvasStore.getAllMetadata()).reverse();
+        this.canvasList = await CanvasStore.getAllMetadata();
 
         // Construct all canvases without activating them
         for (const canvasMetadata of this.canvasList) {
@@ -145,11 +165,24 @@ class CanvasLitElement extends LitElement {
             const newActiveData = this.canvasCache[canvasMetadata.canvasId];
             newActiveData.wrapper.classList.add("active");
             this.activeCanvas = newActiveData.canvas;
+            // Deselect any previously selected canvases
+            const selected = this.shadowRoot.querySelectorAll(".selected");
+            selected.forEach((el) => {
+                el.classList.remove("selected");
+            });
+
+            // Select the current canvas
+            const canvasDiv = this.shadowRoot.getElementById(
+                this.activeCanvas.canvasId
+            );
+            if (canvasDiv) {
+                canvasDiv.classList.add("selected");
+            }
         }
     }
 
     async updateCanvasName(canvasId, newName) {
-        const canvas = new Canvas(this, { canvasId });
+        const canvas = this.getCanvasById(canvasId);
         await canvas.store.setMetadata({ canvasId, name: newName });
         this.canvasList = await CanvasStore.getAllMetadata(); // refresh list
     }
@@ -162,7 +195,7 @@ class CanvasLitElement extends LitElement {
     }
 
     snapshots(canvasId) {
-        const canvas = new Canvas(this, { canvasId });
+        const canvas = this.getCanvasById(canvasId);
         return canvas.snapshots;
     }
 
@@ -236,7 +269,7 @@ class CanvasLitElement extends LitElement {
         const dependentCanvasIds = this.findDependentCanvasIds(
             this.activeCanvas?.canvasId,
             dependencyGraph
-        );
+        ).concat([this.activeCanvas?.canvasId]);
 
         // now we want to find all the canvases that are not in the list of dependent canvases
         const independentCanvasIds = this.canvasList
@@ -249,7 +282,7 @@ class CanvasLitElement extends LitElement {
             // add disabled to the draggable-pill in our sidebar
 
             this.shadowRoot
-                .querySelector(`#${canvasId}`)
+                .getElementById(`${canvasId}`)
                 .setAttribute("draggable", false);
         });
 
@@ -258,7 +291,7 @@ class CanvasLitElement extends LitElement {
             const canvas = this.getCanvasById(canvasId);
             // remove disabled from the draggable-pill in our sidebar
             this.shadowRoot
-                .querySelector(`#${canvasId}`)
+                .getElementById(`${canvasId}`)
                 .setAttribute("draggable", true);
         });
     }
@@ -300,9 +333,7 @@ class CanvasLitElement extends LitElement {
                                     e,
                                     "CompositeTransformer",
                                     canvas
-                                )}"
-                            @click="${() =>
-                                this.attachCanvas(new Canvas(this, canvas))}">
+                                )}">
                             <input
                                 class="pill"
                                 value="${canvas.name}"
@@ -311,8 +342,30 @@ class CanvasLitElement extends LitElement {
                                         canvas.canvasId,
                                         e.target.value
                                     )}" />
+                            <span
+                                class="edit-icon"
+                                @click="${(e) => {
+                                    e.stopPropagation(); // Prevent the click from bubbling up
+                                    const inputElement =
+                                        e.currentTarget.parentElement.querySelector(
+                                            ".pill"
+                                        );
+                                    if (inputElement) {
+                                        inputElement.focus(); // Focus on the input
+                                        inputElement.select(); // Select the text
+                                    }
+                                }}"
+                                >✏️</span
+                            >
 
-                            <div class="pill-drag-handle">::</div>
+                            <div
+                                class="selector"
+                                @click="${() =>
+                                    this.attachCanvas(
+                                        new Canvas(this, canvas)
+                                    )}">
+                                ::
+                            </div>
                         </div>
                     `
                 )}
@@ -324,8 +377,7 @@ class CanvasLitElement extends LitElement {
                             draggable="true"
                             @dragstart="${(e) => this.dragStart(e, name)}">
                             <input class="pill" disabled value="${name}" />
-
-                            <div class="pill-drag-handle">::</div>
+                            <div class="selector">::</div>
                         </div>`
                     )}
             </div>
