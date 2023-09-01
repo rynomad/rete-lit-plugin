@@ -3,7 +3,7 @@ import { AreaExtensions, AreaPlugin } from "https://esm.sh/rete-area-plugin";
 import {
     LitPlugin,
     Presets as LitPresets,
-} from "/dist/rete-litv-plugin.esm.local.js";
+} from "../dist/rete-litv-plugin.esm.local.js";
 import { DataflowEngine } from "https://esm.sh/rete-engine";
 import {
     AutoArrangePlugin,

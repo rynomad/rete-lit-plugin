@@ -179,6 +179,8 @@ class CanvasLitElement extends LitElement {
                 canvasDiv.classList.add("selected");
             }
         }
+
+        this.onPointerEnterSidebar();
     }
 
     async updateCanvasName(canvasId, newName) {
@@ -220,7 +222,7 @@ class CanvasLitElement extends LitElement {
         this.activeCanvas.area.area.setPointerFrom(event);
 
         const position = this.activeCanvas.area.area.pointer;
-        const view = this.activeCanvas.nodeViews.get(node.id);
+        const view = this.activeCanvas.area.nodeViews.get(node.id);
 
         if (!view) throw new Error("view");
 
@@ -266,7 +268,7 @@ class CanvasLitElement extends LitElement {
 
         // we want to find a list of all canvases that are dependent on the current canvas. it needs to traverse the dependency graph
         // and find all the canvases that are dependent on the current canvas, and all the canvases that are dependent on those canvases, etc.
-        const dependentCanvasIds = this.findDependentCanvasIds(
+        const dependentCanvasIds = this.findCanvasDependentOn(
             this.activeCanvas?.canvasId,
             dependencyGraph
         ).concat([this.activeCanvas?.canvasId]);
@@ -296,26 +298,28 @@ class CanvasLitElement extends LitElement {
         });
     }
 
-    findDependentCanvasIds(canvasId, dependencyGraph) {
-        const dependentCanvasIds = [];
+    findCanvasDependentOn(canvasId, dependencyGraph) {
+        const canvasesDependentOnGivenId = [];
 
-        const traverse = (canvasId) => {
-            // get the dependencies of the current canvas
-            const dependencies = dependencyGraph[canvasId];
+        // Function to recursively check if a canvasId is reachable from another canvasId
+        const isReachable = (start, target) => {
+            const dependencies = dependencyGraph[start];
 
-            // if there are no dependencies, return
-            if (!dependencies) return;
+            if (!dependencies) return false;
 
-            // otherwise, add the dependencies to the list of dependent canvases
-            dependentCanvasIds.push(...dependencies);
+            if (dependencies.includes(target)) return true;
 
-            // and for each dependency, traverse it
-            dependencies.forEach(traverse);
+            return dependencies.some((dep) => isReachable(dep, target));
         };
 
-        traverse(canvasId);
+        // Check each canvas to see if it is dependent on the given canvasId
+        for (const id in dependencyGraph) {
+            if (isReachable(id, canvasId)) {
+                canvasesDependentOnGivenId.push(id);
+            }
+        }
 
-        return dependentCanvasIds;
+        return canvasesDependentOnGivenId;
     }
 
     render() {
@@ -361,9 +365,7 @@ class CanvasLitElement extends LitElement {
                             <div
                                 class="selector"
                                 @click="${() =>
-                                    this.attachCanvas(
-                                        new Canvas(this, canvas)
-                                    )}">
+                                    this.attachCanvas(canvas, true)}">
                                 ::
                             </div>
                         </div>

@@ -86,12 +86,7 @@ export class CanvasStore {
                 ].includes(context.type)
             ) {
                 if (!this.lock.getValue()) {
-                    console.log("editor spam?");
-                    const nodes = this.editor
-                        .getNodes()
-                        .map((node) => node.serialize());
-                    const connections = this.editor.getConnections();
-                    await this.saveSnapshotToDB({ nodes, connections });
+                    await this.createSnapshot();
                 }
                 this.historyOffset.next(0);
 
@@ -99,6 +94,13 @@ export class CanvasStore {
             }
             return context;
         });
+    }
+
+    async createSnapshot() {
+        const nodes = this.editor.getNodes().map((node) => node.serialize());
+        const connections = this.editor.getConnections();
+        await this.saveSnapshotToDB({ nodes, connections });
+        this.snapshots.write.next({ nodes, connections });
     }
 
     async setMetadata(metadata) {

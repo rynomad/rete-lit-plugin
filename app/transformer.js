@@ -435,10 +435,10 @@ export class TransformerNode extends LitPresets.classic.Node {
         await this.updateComplete;
 
         console.log("appended userInputs", this.userInputs);
+        this.data.editorNode = this;
 
         if (this.data.component) {
             this.appendChild(this.data.component);
-            this.data.setNode(this);
         }
     }
 
@@ -555,11 +555,15 @@ export class TransformerNode extends LitPresets.classic.Node {
                 ...input,
                 onChange: (e) =>
                     input.showSubmit ? null : input.subject.next(e.formData),
-                onSubmit: (e) => input.subject.next(e.formData),
+                onSubmit: (e) => {
+                    input.subject.next(e.formData);
+                    this.data.requestSnapshot();
+                },
                 uiSchema: setSubmitButtonOptions(input.uiSchema, {
                     norender: !input.showSubmit,
                     submitText: "send",
                 }),
+                schema: this.addFrozenProperty(input.schema),
                 formData: input.subject.getValue() || {},
             }))
             .concat({
@@ -572,6 +576,18 @@ export class TransformerNode extends LitPresets.classic.Node {
                     .intermediates="${this
                         .mappedIntermediates}"></transformer-debug-card>`,
             });
+    }
+
+    addFrozenProperty(schema) {
+        // Base case: if the schema is not an object, return
+        if (!(schema && typeof schema === "object" && schema.properties)) {
+            return schema;
+        }
+        // Add the 'frozen' property if it does not already exist
+        if (!("frozen" in schema.properties)) {
+            schema.properties.frozen = { type: "boolean", default: false };
+        }
+        return schema;
     }
 
     render() {
@@ -680,7 +696,7 @@ function isClassConstructor(variable) {
     return false;
 }
 export class Transformer extends Classic.Node {
-    static socket = socket;
+    static _sockets = {};
     static inputs = [];
     static outputs = [];
     static intermediates = [];
@@ -709,6 +725,17 @@ export class Transformer extends Classic.Node {
     inputs = {};
     outputs = {};
     intermediates = {};
+
+    static getSocket(canvasId) {
+        if (!canvasId) throw new Error("canvasId is undefined");
+        this._sockets[canvasId] =
+            this._sockets[canvasId] || new Classic.Socket(canvasId);
+        return this._sockets[canvasId];
+    }
+
+    get socket() {
+        return Transformer.getSocket(this.canvasId);
+    }
 
     get editor() {
         return this.ide.getCanvasById(this.canvasId)?.editor;
@@ -754,6 +781,10 @@ export class Transformer extends Classic.Node {
 
         this.init();
         this.postInit();
+    }
+
+    requestSnapshot() {
+        this.ide.getCanvasById(this.canvasId).store.createSnapshot();
     }
 
     init() {
@@ -827,7 +858,7 @@ export class Transformer extends Classic.Node {
         for (const def of definitions) {
             const ioConfig = {
                 ...def,
-                socket: this.constructor.socket,
+                socket: this.socket,
                 subject: new BehaviorSubject(),
                 validate: this.createValidateFunction(def),
                 multipleConnections: multipleConnections,
@@ -856,7 +887,7 @@ export class Transformer extends Classic.Node {
     }
 
     setNode(node) {
-        this.node = node;
+        this.data.node = this;
     }
 
     transform() {
