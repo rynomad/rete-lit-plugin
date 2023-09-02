@@ -15,8 +15,17 @@ import {
     Presets as LitPresets,
 } from "../dist/rete-litv-plugin.esm.local.js";
 import "./form.js";
+function getUID() {
+    if ("randomBytes" in crypto) {
+        return crypto.randomBytes(8).toString("hex");
+    }
 
-const socket = new Classic.Socket("socket");
+    const bytes = crypto.getRandomValues(new Uint8Array(8));
+    const array = Array.from(bytes);
+    const hexPairs = array.map((b) => b.toString(16).padStart(2, "0"));
+
+    return hexPairs.join("");
+}
 
 export class TransformerInput extends Classic.Input {
     constructor(inputConfig) {
@@ -603,14 +612,13 @@ export class TransformerNode extends LitPresets.classic.Node {
                             (input) => html`
                                 <div
                                     class="socket-column"
-                                    data-testid="input-${input.hash ||
-                                    input.label}">
+                                    data-testid="input-${input.key}">
                                     <ref-element
                                         class="input-socket"
                                         .data=${{
                                             type: "socket",
                                             side: "input",
-                                            key: input.hash || input.label,
+                                            key: input.key,
                                             nodeId: this.data?.id,
                                             payload: input.socket,
                                         }}
@@ -710,8 +718,12 @@ export class Transformer extends Classic.Node {
             throw new Error(`Unknown class: ${data.className}`);
         }
 
-        const transformer = new ChildClass(ide, data.canvasId, data.props);
-        transformer.id = data.id;
+        const transformer = new ChildClass(
+            ide,
+            data.canvasId,
+            data.props,
+            data.id
+        );
 
         for (const key in data.inputs) {
             if (transformer.inputs[key]) {
@@ -757,12 +769,19 @@ export class Transformer extends Classic.Node {
             : 0;
     }
 
-    constructor(ide, canvasId, dataOrConstructor = {}) {
+    constructor(
+        ide,
+        canvasId,
+        dataOrConstructor = {},
+        id = getUID().split("-").pop()
+    ) {
         const name = isClassConstructor(dataOrConstructor)
             ? dataOrConstructor.toString().match(/\w+/g)[1]
             : dataOrConstructor.name || dataOrConstructor.className;
 
         super(name);
+        this.id = id;
+        this.ready = new Promise((r) => (this.readyResolve = r));
         this.ide = ide;
         this.canvasId = canvasId;
         this.props = isClassConstructor(dataOrConstructor)
@@ -787,6 +806,26 @@ export class Transformer extends Classic.Node {
         this.ide.getCanvasById(this.canvasId).store.createSnapshot();
     }
 
+    addInput(input) {
+        const key = input.key || `${this.id}-${input.label}`;
+        input.key = key;
+        super.addInput(key, input);
+    }
+
+    addOutput(output) {
+        const key = output.key || `${this.id}-${output.label}`;
+        output.key = key;
+        super.addOutput(key, output);
+    }
+
+    getInput(key) {
+        return this.inputs[`${this.id}-${key}`];
+    }
+
+    getOutput(key) {
+        return this.outputs[`${this.id}-${key}`];
+    }
+
     init() {
         this.processIO(
             this.constructor.inputs,
@@ -800,6 +839,7 @@ export class Transformer extends Classic.Node {
         );
         this.processIntermediates(this.constructor.intermediates);
         this.transform();
+        this.readyResolve();
     }
 
     async postInit() {
@@ -815,10 +855,17 @@ export class Transformer extends Classic.Node {
             await new Promise((resolve) => setTimeout(resolve, 100));
         }
 
+        let listener = Math.random();
+
         this.editor.addPipe((context) => {
             if (context.data.target === this.id) {
                 if (context.type === "connectioncreated") {
-                    console.log("new connection created", this.id, context);
+                    console.log(
+                        "new connection created",
+                        listener,
+                        this.id,
+                        context
+                    );
                     try {
                         this.subscribe(context.data);
                     } catch (error) {
@@ -867,7 +914,7 @@ export class Transformer extends Classic.Node {
                 ? TransformerOutput
                 : TransformerInput;
             const ioInstance = new ioClass(ioConfig);
-            addMethod(def.label, ioInstance);
+            addMethod(ioInstance);
         }
     }
 
@@ -894,12 +941,20 @@ export class Transformer extends Classic.Node {
         // To be overridden by child class
     }
 
-    subscribe(context, node) {
+    async subscribe(context, node) {
         if (context.target !== this.id) return;
+        await this.ready;
+        if (context.target === "d1d3c91b3fef5219") {
+            debugger;
+        }
 
         const sourceNode = node || this.editor.getNode(context.source);
+        await sourceNode.ready;
         const sourceOutput = sourceNode.outputs[context.sourceOutput];
         const targetInput = this.inputs[context.targetInput];
+        if (!targetInput || !sourceOutput) {
+            debugger;
+        }
 
         // Check if the input already has a subscription
         if (targetInput.subscription) {

@@ -1,4 +1,4 @@
-import { debounceTime, tap, map } from "https://esm.sh/rxjs";
+import { debounceTime, tap, map, filter } from "https://esm.sh/rxjs";
 import {
     Transformer,
     TransformerInput,
@@ -8,8 +8,8 @@ import {
 import { deepEqual } from "https://esm.sh/fast-equals";
 window.totalSet = new Set();
 export class CompositeTransformer extends Transformer {
-    constructor(ide, canvasId, props = {}) {
-        super(ide, canvasId, props);
+    constructor(ide, canvasId, props = {}, id) {
+        super(ide, canvasId, props, id);
 
         this.nodes = new Set();
         this.connections = new Set();
@@ -41,6 +41,8 @@ export class CompositeTransformer extends Transformer {
         this.snapshots = this.ide.snapshots(this.props.canvasId).write;
         this.snapshots
             .pipe(
+                filter((snapshot) => snapshot),
+                debounceTime(100),
                 tap((snapshots) =>
                     console.log("Composite snapshot", snapshots)
                 ),
@@ -49,6 +51,7 @@ export class CompositeTransformer extends Transformer {
             )
             .subscribe(() => {
                 console.log("Composite snapshot consumed");
+                this.readyResolve();
                 totalSet.add(this);
                 this.editorNode?.requestUpdate();
                 this.requestSnapshot();
@@ -58,13 +61,28 @@ export class CompositeTransformer extends Transformer {
     }
 
     serialize() {
-        debugger;
+        // debugger;
         return super.serialize();
     }
 
     consumeSnapshot(snapshot) {
+        snapshot = JSON.parse(JSON.stringify(snapshot));
         const currentNodes = Array.from(this.nodes.values());
         const currentConnections = Array.from(this.connections.values());
+
+        const idMap = new Map();
+        // adjust ids
+        for (const node of snapshot.nodes) {
+            idMap.set(node.id, node.id);
+            node.id = `${this.id}-${node.id}`;
+        }
+
+        for (const connection of snapshot.connections) {
+            connection.source = `${this.id}-${connection.source}`;
+            connection.target = `${this.id}-${connection.target}`;
+            connection.sourceOutput = `${this.id}-${connection.sourceOutput}`;
+            connection.targetInput = `${this.id}-${connection.targetInput}`;
+        }
 
         for (const connection of currentConnections) {
             if (!snapshot.connections.find((c) => c.id === connection.id)) {
@@ -97,7 +115,6 @@ export class CompositeTransformer extends Transformer {
         for (const node of snapshot.nodes) {
             if (!currentNodes.find((n) => n.id === node.id)) {
                 const innerNode = Transformer.deserialize(this.ide, node);
-
                 this.addNode(innerNode);
             }
         }
@@ -136,61 +153,59 @@ export class CompositeTransformer extends Transformer {
         // Remove inputs and outputs not in snapshot
         for (const input of currentInputs) {
             if (!inputs.find((i) => i.id === input.id)) {
-                this.removeInput(input.hash);
+                this.removeInput(input.key);
             }
         }
 
         for (const output of currentOutputs) {
             if (!outputs.find((o) => o.id === output.id)) {
-                this.removeOutput(output.hash);
+                this.removeOutput(output.key);
             }
         }
 
         for (const input of inputs) {
-            if (!this.inputs[input.hash]) {
+            if (!this.inputs[input.key]) {
                 const node = Array.from(this.nodes).find(
                     (n) => n.id === input.nodeId
                 );
-                this.addInput(input.hash, node.inputs[input.portHash]);
+                const _input = node.inputs[input.key];
+                if (_input.key.startsWith(`${this.id}-`) === false) {
+                    _input.key = `${this.id}-${_input.key}`;
+                }
+                this.addInput(_input);
             }
         }
 
         for (const output of outputs) {
-            if (!this.outputs[output.hash]) {
+            if (!this.outputs[output.key]) {
                 const node = Array.from(this.nodes).find(
                     (n) => n.id === output.nodeId
                 );
-                this.addOutput(output.hash, node.outputs[output.portHash]);
+                const _output = node.outputs[output.key];
+                if (_output.key.startsWith(`${this.id}-`) === false) {
+                    _output.key = `${this.id}-${_output.key}`;
+                }
+                this.addOutput(_output);
             }
         }
     }
 
-    addInput(hash, input) {
-        input.hash = hash;
-        super.addInput(hash, input);
+    removeInput(key) {
+        this.removeConnections(key);
+        super.removeInput(key);
     }
 
-    addOutput(hash, output) {
-        output.hash = hash;
-        super.addOutput(hash, output);
+    removeOutput(key) {
+        this.removeConnections(key);
+        super.removeOutput(key);
     }
 
-    removeInput(hash) {
-        this.removeConnections(hash);
-        super.removeInput(hash);
-    }
-
-    removeOutput(hash) {
-        this.removeConnections(hash);
-        super.removeOutput(hash);
-    }
-
-    removeConnections(hash) {
+    removeConnections(key) {
         const connections = this.editor.connections;
         const toRemove = connections.filter(
             (c) =>
-                (c.targetInput == hash && c.target == this.id) ||
-                (c.sourceOutput == hash && c.source == this.id)
+                (c.targetInput == key && c.target == this.id) ||
+                (c.sourceOutput == key && c.source == this.id)
         );
 
         for (const connection of toRemove) {
@@ -253,12 +268,10 @@ export class CompositeTransformer extends Transformer {
                     ) {
                         // Add the port to the list
                         unconnectedPorts.push({
-                            hash: `${id}-${label}`,
+                            ...port,
                             nodeId: id,
                             nodeName: name,
-                            portHash: port.hash || label,
                             portType,
-                            ...port,
                         });
                     }
                 }

@@ -285,7 +285,7 @@ class CanvasLitElement extends LitElement {
 
             this.shadowRoot
                 .getElementById(`${canvasId}`)
-                .setAttribute("draggable", false);
+                ?.setAttribute("draggable", false);
         });
 
         // and enable drag and drop for all the canvases that are not in the list of dependent canvases
@@ -294,7 +294,7 @@ class CanvasLitElement extends LitElement {
             // remove disabled from the draggable-pill in our sidebar
             this.shadowRoot
                 .getElementById(`${canvasId}`)
-                .setAttribute("draggable", true);
+                ?.setAttribute("draggable", true);
         });
     }
 

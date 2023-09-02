@@ -185,15 +185,15 @@ export class OpenAITransformer extends Transformer {
         },
     ];
 
-    constructor(ide, canvasId, data = OpenAITransformer) {
-        super(ide, canvasId, data);
+    constructor(ide, canvasId, data = OpenAITransformer, id) {
+        super(ide, canvasId, data, id);
     }
 
     async transform() {
         let lastStream = null;
         combineLatest([
-            this.inputs["config"].subject.pipe(filter((i) => i)),
-            this.inputs["chat"].subject.pipe(filter((e) => e)),
+            this.getInput("config").subject.pipe(filter((i) => i)),
+            this.getInput("chat").subject.pipe(filter((e) => e)),
         ])
             .pipe(
                 mergeMap(async ([config, chat]) => {
@@ -233,9 +233,11 @@ export class OpenAITransformer extends Transformer {
                 }),
                 filter((e) => e)
             )
-            .subscribe(this.outputs.chat.subject);
+            .subscribe(this.getOutput("chat").subject);
 
-        this.inputs["config"].subject.subscribe(this.outputs.config.subject);
+        this.getInput("config").subject.subscribe(
+            this.getOutput("config").subject
+        );
     }
 }
 
@@ -316,14 +318,14 @@ export class PromptTransformer extends Transformer {
         },
     ];
 
-    constructor(ide, canvasId, data = PromptTransformer) {
-        super(ide, canvasId, data);
+    constructor(ide, canvasId, data = PromptTransformer, id) {
+        super(ide, canvasId, data, id);
     }
 
     transform() {
         combineLatest([
-            this.inputs["prompt"].subject.pipe(filter((i) => i)),
-            this.inputs["chat"].subject.pipe(
+            this.getInput("prompt").subject.pipe(filter((i) => i)),
+            this.getInput("chat").subject.pipe(
                 debounceTime(1000),
                 distinctUntilChanged(deepEqual)
             ),
@@ -340,7 +342,7 @@ export class PromptTransformer extends Transformer {
                     ];
                 })
             )
-            .subscribe(this.outputs.chat.subject);
+            .subscribe(this.getOutput("chat").subject);
     }
 }
 
