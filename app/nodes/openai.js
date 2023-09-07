@@ -28,25 +28,21 @@ const StreamRenderer = CardStyleMixin(
         `;
 
         static properties = {
-            inputs: { type: Object },
-            outputs: { type: Object },
+            node: { type: Object },
         };
 
         constructor() {
             super();
-            this.inputs = {};
-            this.outputs = {};
         }
 
         connectedCallback() {
             super.connectedCallback();
-            if (this.outputs.stream) {
-                this.outputs.stream.subject
-                    .pipe(filter((e) => e))
+            if (this.node.getOutput("stream")) {
+                this.node
+                    .getOutput("stream")
+                    .subject.pipe(filter((e) => e))
                     .subscribe((content) => {
-                        content.subscribe((content) => {
-                            this.renderContent(content);
-                        });
+                        content.subscribe(this.renderContent.bind(this));
                     });
             }
         }
@@ -216,7 +212,7 @@ export class OpenAITransformer extends Transformer {
                             }));
 
                         let outputStream = new BehaviorSubject("");
-                        this.outputs.stream.subject.next(outputStream);
+                        this.getOutput("stream").subject.next(outputStream);
 
                         let content = "";
                         for await (const part of stream) {
@@ -229,7 +225,10 @@ export class OpenAITransformer extends Transformer {
                             ...(chat || []),
                             { role: "assistant", content: content },
                         ];
-                    } catch (e) {}
+                    } catch (e) {
+                        console.error(e);
+                        this.openai = null;
+                    }
                 }),
                 filter((e) => e)
             )

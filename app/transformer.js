@@ -454,6 +454,7 @@ export class TransformerNode extends LitPresets.classic.Node {
     async connectedCallback() {
         super.connectedCallback();
         this.resizeObserver.observe(this);
+        this.add;
     }
 
     disconnectedCallback() {
@@ -819,10 +820,12 @@ export class Transformer extends Classic.Node {
     }
 
     getInput(key) {
+        console.log(key, this.inputs, this.inputs[`${this.id}-${key}`]);
         return this.inputs[`${this.id}-${key}`];
     }
 
     getOutput(key) {
+        console.log(key, this.outputs, this.outputs[`${this.id}-${key}`]);
         return this.outputs[`${this.id}-${key}`];
     }
 
@@ -842,13 +845,22 @@ export class Transformer extends Classic.Node {
         this.readyResolve();
     }
 
+    clearIO() {
+        for (const key in this.inputs) {
+            if (key.endsWith("config")) continue;
+            this.removeInput(key);
+        }
+
+        for (const key in this.outputs) {
+            this.removeOutput(key);
+        }
+    }
+
     async postInit() {
         //   debugger
         if (this.constructor.Component) {
             this.component = new this.constructor.Component();
-            this.component.inputs = this.inputs;
-            this.component.outputs = this.outputs;
-            this.component.intermediates = this.intermediates;
+            this.component.node = this;
         }
 
         while (!this.editor) {
@@ -880,11 +892,37 @@ export class Transformer extends Classic.Node {
         });
     }
 
+    removeInput(key) {
+        this.removeConnections(key);
+        super.removeInput(key);
+    }
+
+    removeOutput(key) {
+        this.removeConnections(key);
+        super.removeOutput(key);
+    }
+
+    removeConnections(key) {
+        const connections = this.editor.connections;
+        const toRemove = connections.filter(
+            (c) =>
+                (c.targetInput == key && c.target == this.id) ||
+                (c.sourceOutput == key && c.source == this.id)
+        );
+
+        for (const connection of toRemove) {
+            this.editor.removeConnection(connection.id);
+        }
+    }
+
     serialize() {
         const serializedInputs = {};
 
         for (const key in this.inputs) {
-            if (!this.inputs[key].subscription) {
+            if (
+                !this.inputs[key].subscription ||
+                this.inputs[key].subject.getValue()?.frozen
+            ) {
                 serializedInputs[key] = this.inputs[key].subject.getValue();
             }
         }
@@ -931,10 +969,6 @@ export class Transformer extends Classic.Node {
         for (const item of list) {
             this.intermediates[item.label] = item;
         }
-    }
-
-    setNode(node) {
-        this.data.node = this;
     }
 
     transform() {

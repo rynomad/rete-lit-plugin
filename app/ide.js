@@ -5,8 +5,8 @@ import { LitElement, html, css } from "https://esm.sh/lit@2.0.1";
 import { Canvas } from "./canvas.js";
 import { CanvasStore } from "./canvas-store.js";
 import { Transformer } from "./transformer.js";
-import "./nodes/composite.js";
-
+// import "./nodes/composite.js";
+import "./nodes/adhoc.js";
 class CanvasLitElement extends LitElement {
     static get styles() {
         return css`

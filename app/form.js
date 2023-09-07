@@ -15,6 +15,7 @@ const RJSFComponent = CardStyleMixin(
                 css`
                     :host {
                         display: block;
+                        overflow: auto;
                     }
                 `,
             ];

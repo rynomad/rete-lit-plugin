@@ -1,4 +1,4 @@
-import { debounceTime, tap, map, filter } from "https://esm.sh/rxjs";
+import { debounceTime, tap, map, filter, mergeMap } from "https://esm.sh/rxjs";
 import {
     Transformer,
     TransformerInput,
@@ -46,7 +46,7 @@ export class CompositeTransformer extends Transformer {
                 tap((snapshots) =>
                     console.log("Composite snapshot", snapshots)
                 ),
-                map(this.consumeSnapshot.bind(this)),
+                mergeMap(this.consumeSnapshot.bind(this)),
                 map(this.updateIO.bind(this))
             )
             .subscribe(() => {
@@ -61,11 +61,36 @@ export class CompositeTransformer extends Transformer {
     }
 
     serialize() {
-        // debugger;
-        return super.serialize();
+        const start = super.serialize();
+
+        // get the frozen values from all inner node inputs
+        const frozenInputs = Array.from(this.nodes.values())
+            .map((node) => node.inputs)
+            .map((inputs) =>
+                Object.entries(inputs)
+                    .filter(([_, input]) => input.subject.getValue()?.frozen)
+                    .map(([key, input]) => [key, input])
+            )
+            .flat();
+
+        // insert by key into the start object
+        for (const [key, input] of frozenInputs) {
+            start.inputs[key] = input.subject.getValue();
+        }
+
+        return start;
     }
 
-    consumeSnapshot(snapshot) {
+    modifyConnections(connections) {
+        for (const connection of connections) {
+            connection.source = `${this.id}-${connection.source}`;
+            connection.target = `${this.id}-${connection.target}`;
+            connection.sourceOutput = `${this.id}-${connection.sourceOutput}`;
+            connection.targetInput = `${this.id}-${connection.targetInput}`;
+        }
+    }
+
+    async consumeSnapshot(snapshot) {
         snapshot = JSON.parse(JSON.stringify(snapshot));
         const currentNodes = Array.from(this.nodes.values());
         const currentConnections = Array.from(this.connections.values());
@@ -77,12 +102,7 @@ export class CompositeTransformer extends Transformer {
             node.id = `${this.id}-${node.id}`;
         }
 
-        for (const connection of snapshot.connections) {
-            connection.source = `${this.id}-${connection.source}`;
-            connection.target = `${this.id}-${connection.target}`;
-            connection.sourceOutput = `${this.id}-${connection.sourceOutput}`;
-            connection.targetInput = `${this.id}-${connection.targetInput}`;
-        }
+        this.modifyConnections(snapshot.connections);
 
         for (const connection of currentConnections) {
             if (!snapshot.connections.find((c) => c.id === connection.id)) {
@@ -99,13 +119,19 @@ export class CompositeTransformer extends Transformer {
             } else {
                 // Update node inputs if they don't match snapshot
                 Object.keys(node.inputs).forEach((key) => {
+                    const [_, ...rest] = key.split("-");
+                    const snapKey = rest.join("-");
+                    console.log(key, snapKey, node.inputs, snapshotNode.inputs);
                     if (
                         !deepEqual(
                             node.inputs[key].subject.getValue(),
-                            snapshotNode.inputs[key]
-                        )
+                            snapshotNode.inputs[snapKey]
+                        ) &&
+                        snapshotNode.inputs[snapKey]?.frozen
                     ) {
-                        node.inputs[key].subject.next(snapshotNode.inputs[key]);
+                        node.inputs[key].subject.next(
+                            snapshotNode.inputs[snapKey]
+                        );
                     }
                 });
             }
@@ -115,7 +141,30 @@ export class CompositeTransformer extends Transformer {
         for (const node of snapshot.nodes) {
             if (!currentNodes.find((n) => n.id === node.id)) {
                 const innerNode = Transformer.deserialize(this.ide, node);
+                await innerNode.ready;
                 this.addNode(innerNode);
+                const snapshotNode = node;
+                Object.keys(innerNode.inputs).forEach((key) => {
+                    const [_, ...rest] = key.split("-");
+                    const snapKey = rest.join("-");
+                    console.log(
+                        key,
+                        snapKey,
+                        innerNode.inputs,
+                        snapshotNode.inputs
+                    );
+                    if (
+                        !deepEqual(
+                            innerNode.inputs[key].subject.getValue(),
+                            snapshotNode.inputs[snapKey]
+                        ) &&
+                        snapshotNode.inputs[snapKey]?.frozen
+                    ) {
+                        innerNode.inputs[key].subject.next(
+                            snapshotNode.inputs[snapKey]
+                        );
+                    }
+                });
             }
         }
 
@@ -129,16 +178,31 @@ export class CompositeTransformer extends Transformer {
         return snapshot;
     }
 
-    addNode(node) {
-        if (node.component) {
-            this.component?.appendChild(node.component);
+    async addNode(node) {
+        if (this.editorNode) {
+            if (node.childComponents) {
+                node.childComponents.forEach((component) =>
+                    this.editorNode.appendChild(component)
+                );
+            } else if (node.component) {
+                this.editorNode.appendChild(node.component);
+            }
+        } else {
+            this.childComponents = [];
+            if (node.childComponents) {
+                node.childComponents.forEach((component) =>
+                    this.childComponents.push(component)
+                );
+            } else if (node.component) {
+                this.childComponents.push(node.component);
+            }
         }
         this.nodes.add(node);
     }
 
-    removeNode(node) {
-        if (node.component) {
-            this.component?.removeChild(node.component);
+    async removeNode(node) {
+        if (node.component && this.editorNode) {
+            this.editorNode.removeChild(node.component);
         }
         this.nodes.delete(node);
     }
@@ -149,7 +213,6 @@ export class CompositeTransformer extends Transformer {
 
         const inputs = this.findUnconnectedPorts("inputs", true);
         const outputs = this.findUnconnectedPorts("outputs");
-        // debugger;
         // Remove inputs and outputs not in snapshot
         for (const input of currentInputs) {
             if (!inputs.find((i) => i.id === input.id)) {
@@ -190,29 +253,6 @@ export class CompositeTransformer extends Transformer {
         }
     }
 
-    removeInput(key) {
-        this.removeConnections(key);
-        super.removeInput(key);
-    }
-
-    removeOutput(key) {
-        this.removeConnections(key);
-        super.removeOutput(key);
-    }
-
-    removeConnections(key) {
-        const connections = this.editor.connections;
-        const toRemove = connections.filter(
-            (c) =>
-                (c.targetInput == key && c.target == this.id) ||
-                (c.sourceOutput == key && c.source == this.id)
-        );
-
-        for (const connection of toRemove) {
-            this.editor.removeConnection(connection.id);
-        }
-    }
-
     subscribeConnection(connection) {
         const { source, target } = connection;
         const sourceNode = Array.from(this.nodes).find((n) => n.id === source);
@@ -248,7 +288,7 @@ export class CompositeTransformer extends Transformer {
         connections.forEach((connection) => {
             const field = connection[fieldToCheck];
             const label = connection[labelToCheck];
-            connectedPorts.add(`${field}-${label}`);
+            connectedPorts.add(label);
         });
 
         // Array to store ports that are unconnected
@@ -261,12 +301,13 @@ export class CompositeTransformer extends Transformer {
                 const { label, subject } = port;
 
                 // Check if the port is connected
-                if (!connectedPorts.has(`${id}-${label}`)) {
+                if (!connectedPorts.has(port.key)) {
                     if (
                         !checkFrozen ||
                         !(checkFrozen && subject.getValue()?.frozen)
                     ) {
                         // Add the port to the list
+
                         unconnectedPorts.push({
                             ...port,
                             nodeId: id,
