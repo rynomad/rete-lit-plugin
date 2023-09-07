@@ -3,6 +3,7 @@ import {
     distinctUntilChanged,
     filter,
     tap,
+    debounceTime,
 } from "https://esm.sh/rxjs@7.3.0";
 import deepEqual from "https://esm.sh/fast-deep-equal";
 
@@ -17,8 +18,7 @@ export class SafeSubject {
         this.write
             .pipe(
                 this.filter, // Filter out null and undefined values
-                distinctUntilChanged(deepEqual),
-                tap(() => console.log("safe subject spam"))
+                distinctUntilChanged(deepEqual)
             )
             .subscribe(
                 (value) => this._read.next(value),

@@ -58,14 +58,14 @@ export class CanvasStore {
 
         this.historyOffset
             .pipe(
-                tap((h) => console.log("offset changed", h)),
+                // tap((h) => console.log("offset changed", h)),
                 mergeMap(this.loadSnapshotFromDB.bind(this)),
                 distinctUntilChanged(deepEqual),
                 filter((snapshot) => snapshot && !this.lock.getValue()),
                 tap(() => this.lock.next(true)),
                 mergeMap(this.updateEditorFromSnapshot.bind(this)),
-                tap(() => this.lock.next(false)),
-                tap(() => console.log("SPAM?"))
+                tap(() => this.lock.next(false))
+                // tap(() => console.log("SPAM?"))
             )
             .subscribe(this.snapshots.write);
 
@@ -265,7 +265,7 @@ export class CanvasStore {
             snapshot.nodes.map(async (node) => {
                 if (!currentNodes.find((n) => n.id === node.id)) {
                     await this.editor.addNode(
-                        Transformer.deserialize(this.ide, node)
+                        await Transformer.deserialize(this.ide, node)
                     );
                 }
             })

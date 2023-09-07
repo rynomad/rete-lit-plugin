@@ -7,6 +7,7 @@ import { CanvasStore } from "./canvas-store.js";
 import { Transformer } from "./transformer.js";
 // import "./nodes/composite.js";
 import "./nodes/adhoc.js";
+import "./nodes/openai.js";
 class CanvasLitElement extends LitElement {
     static get styles() {
         return css`

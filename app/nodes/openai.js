@@ -1,14 +1,5 @@
 import { LitElement, css, html } from "https://esm.sh/lit";
-import {
-    combineLatest,
-    map,
-    mergeMap,
-    filter,
-    debounceTime,
-    tap,
-    distinctUntilChanged,
-} from "https://esm.sh/rxjs";
-import deepEqual from "https://esm.sh/fast-deep-equal";
+import { combineLatest, map, mergeMap, filter } from "https://esm.sh/rxjs";
 import { unsafeHTML } from "https://esm.sh/lit/directives/unsafe-html";
 import OpenAI from "https://esm.sh/openai";
 import { marked } from "https://esm.sh/marked";
@@ -23,7 +14,6 @@ const StreamRenderer = CardStyleMixin(
                 display: block;
                 padding: 16px;
                 color: var(--stream-renderer-text-color, black);
-                max-width: 500px;
             }
         `;
 
@@ -68,6 +58,7 @@ export class OpenAITransformer extends Transformer {
         {
             label: "config",
             showSubmit: true,
+            chainable: true,
             schema: {
                 $schema: "http://json-schema.org/draft-07/schema#",
                 type: "object",
@@ -88,6 +79,12 @@ export class OpenAITransformer extends Transformer {
                         type: "boolean",
                         default: true,
                     },
+                    quantity: {
+                        type: "number",
+                        minimum: 1,
+                        maximum: 10,
+                        default: 1,
+                    },
                 },
                 required: ["model", "api_key"],
             },
@@ -101,7 +98,8 @@ export class OpenAITransformer extends Transformer {
             },
         },
         {
-            label: "chat",
+            label: "history",
+            chainable: "manual",
             schema: {
                 $schema: "http://json-schema.org/draft-07/schema#",
                 type: "array",
@@ -120,130 +118,9 @@ export class OpenAITransformer extends Transformer {
                 },
             },
         },
-    ];
-    static outputs = [
-        {
-            label: "config",
-            schema: {
-                $schema: "http://json-schema.org/draft-07/schema#",
-                type: "object",
-                properties: {
-                    model: {
-                        type: "string",
-                        default: "gpt-4",
-                    },
-                    temperature: {
-                        type: "number",
-                        minimum: 0,
-                        maximum: 2,
-                    },
-                    stream: {
-                        type: "boolean",
-                        default: true,
-                    },
-                },
-                required: ["model"],
-            },
-        },
-        {
-            label: "chat",
-            schema: {
-                $schema: "http://json-schema.org/draft-07/schema#",
-                type: "array",
-                items: {
-                    type: "object",
-                    properties: {
-                        role: {
-                            type: "string",
-                            enum: ["system", "user", "assistant"],
-                        },
-                        content: {
-                            type: "string",
-                        },
-                    },
-                    required: ["role", "content"],
-                },
-            },
-        },
-        {
-            label: "stream",
-            schema: {
-                $schema: "http://json-schema.org/draft-07/schema#",
-                type: "object",
-                properties: {
-                    _rxjsObservable: {
-                        type: "boolean",
-                        default: true,
-                    },
-                },
-                required: ["_rxjsObservable"],
-            },
-        },
-    ];
-
-    constructor(ide, canvasId, data = OpenAITransformer, id) {
-        super(ide, canvasId, data, id);
-    }
-
-    async transform() {
-        let lastStream = null;
-        combineLatest([
-            this.getInput("config").subject.pipe(filter((i) => i)),
-            this.getInput("chat").subject.pipe(filter((e) => e)),
-        ])
-            .pipe(
-                mergeMap(async ([config, chat]) => {
-                    try {
-                        this.openai =
-                            this.openai ||
-                            new OpenAI({
-                                apiKey: config.api_key,
-                                dangerouslyAllowBrowser: true,
-                            });
-                        if (lastStream) {
-                            await lastStream.controller.abort();
-                        }
-                        const stream = (lastStream =
-                            await this.openai.chat.completions.create({
-                                model: config.model,
-                                messages: chat,
-                                temperature: config.temperature,
-                                stream: config.stream,
-                            }));
-
-                        let outputStream = new BehaviorSubject("");
-                        this.getOutput("stream").subject.next(outputStream);
-
-                        let content = "";
-                        for await (const part of stream) {
-                            const delta = part.choices[0]?.delta?.content || "";
-                            content += delta;
-                            outputStream.next(content);
-                        }
-
-                        return [
-                            ...(chat || []),
-                            { role: "assistant", content: content },
-                        ];
-                    } catch (e) {
-                        console.error(e);
-                        this.openai = null;
-                    }
-                }),
-                filter((e) => e)
-            )
-            .subscribe(this.getOutput("chat").subject);
-
-        this.getInput("config").subject.subscribe(
-            this.getOutput("config").subject
-        );
-    }
-}
-
-export class PromptTransformer extends Transformer {
-    static inputs = [
         {
             label: "prompt",
+            chainable: true,
             style: "width: 500px;",
             showSubmit: true,
             schema: {
@@ -273,83 +150,129 @@ export class PromptTransformer extends Transformer {
                 },
             },
         },
-        {
-            label: "chat",
-            schema: {
-                $schema: "http://json-schema.org/draft-07/schema#",
-                type: "array",
-                items: {
-                    type: "object",
-                    properties: {
-                        role: {
-                            type: "string",
-                            enum: ["system", "user", "assistant"],
-                        },
-                        content: {
-                            type: "string",
-                        },
-                    },
-                    required: ["role", "content"],
-                },
-            },
-        },
     ];
     static outputs = [
         {
-            label: "chat",
+            label: "stream",
+            schema: {
+                $schema: "http://json-schema.org/draft-07/schema#",
+                type: "object",
+                properties: {
+                    _rxjsObservable: {
+                        type: "boolean",
+                        default: true,
+                    },
+                },
+                required: ["_rxjsObservable"],
+            },
+        },
+        {
+            label: "choices",
             schema: {
                 $schema: "http://json-schema.org/draft-07/schema#",
                 type: "array",
                 items: {
-                    type: "object",
-                    properties: {
-                        role: {
-                            type: "string",
-                            enum: ["system", "user", "assistant"],
-                        },
-                        content: {
-                            type: "string",
-                        },
-                    },
-                    required: ["role", "content"],
+                    type: "string",
                 },
             },
         },
     ];
 
-    constructor(ide, canvasId, data = PromptTransformer, id) {
+    constructor(ide, canvasId, data = OpenAITransformer, id) {
         super(ide, canvasId, data, id);
     }
 
     transform() {
+        let lastStream = null;
         combineLatest([
-            this.getInput("prompt").subject.pipe(filter((i) => i)),
-            this.getInput("chat").subject.pipe(
-                debounceTime(1000),
-                distinctUntilChanged(deepEqual)
+            this.getInput("config").subject.pipe(filter((i) => i)),
+            this.getInput("history").subject.pipe(
+                filter((e) => {
+                    // console.log("history", e);
+                    return e || !this.hasConnection("history");
+                }),
+                map((e) => (e ? e : []))
             ),
+            this.getInput("prompt").subject.pipe(filter((i) => i)),
         ])
             .pipe(
-                map(([prompt, chat]) => {
-                    console.log("prompt", prompt, chat);
-                    return [
-                        ...(chat || []),
-                        {
-                            role: prompt.role || "user",
-                            content: prompt.content,
-                        },
-                    ];
-                })
+                mergeMap(async ([config, history, prompt]) => {
+                    const messages = [...history, { role: "user", ...prompt }];
+                    // console.log("openai", config, history, prompt);
+                    try {
+                        this.openai =
+                            this.openai ||
+                            new OpenAI({
+                                apiKey: config.api_key,
+                                dangerouslyAllowBrowser: true,
+                            });
+                        if (lastStream) {
+                            await lastStream.controller.abort();
+                        }
+
+                        const remainder = config.quantity - 1;
+
+                        const stream = (lastStream =
+                            await this.openai.chat.completions.create({
+                                model: config.model,
+                                messages,
+                                temperature: config.temperature,
+                                stream: config.stream,
+                            }));
+
+                        let outputStream = new BehaviorSubject("");
+                        this.getOutput("stream").subject.next(outputStream);
+                        let streamDone = false;
+
+                        let content = "";
+
+                        if (remainder > 0) {
+                            this.openai.chat.completions
+                                .create({
+                                    model: config.model,
+                                    messages,
+                                    temperature: config.temperature,
+                                    n: remainder,
+                                })
+                                .then(async (e) => {
+                                    while (!streamDone) {
+                                        await new Promise((resolve) =>
+                                            setTimeout(resolve, 1000)
+                                        );
+                                    }
+
+                                    const choices = e.choices
+                                        .map((e) => e.message.content)
+                                        .concat(content);
+                                    this.getOutput("choices").subject.next(
+                                        choices
+                                    );
+                                });
+                        }
+
+                        for await (const part of stream) {
+                            const delta = part.choices[0]?.delta?.content || "";
+                            content += delta;
+                            outputStream.next(content);
+                        }
+                        streamDone = true;
+
+                        return [
+                            ...messages,
+                            { role: "assistant", content: content },
+                        ];
+                    } catch (e) {
+                        console.error(e);
+                        this.openai = null;
+                    }
+                }),
+                filter((e) => e)
             )
-            .subscribe(this.getOutput("chat").subject);
+            .subscribe(this.getOutput("history").subject);
     }
 }
 
 Transformer.childClasses.set(
     OpenAITransformer.toString().match(/\w+/g)[1],
     OpenAITransformer
-);
-Transformer.childClasses.set(
-    PromptTransformer.toString().match(/\w+/g)[1],
-    PromptTransformer
 );

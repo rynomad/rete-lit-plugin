@@ -7,23 +7,31 @@ import {
     debounceTime,
     tap,
     distinctUntilChanged,
+    BehaviorSubject,
 } from "https://esm.sh/rxjs";
 export class CanvasView {
     constructor(canvas) {
         this.canvas = canvas;
-        this.arrangeObserver = new SafeSubject(true);
+        this.arrangeObserver = new BehaviorSubject();
 
-        this.arrangeObserver.pipe(debounceTime(200)).subscribe(() => {
-            this.canvas.layoutArrange();
+        this.arrangeObserver.pipe(debounceTime(500)).subscribe((nodes) => {
+            // console.log("trigger arrange", nodes);
+            this.canvas.layoutArrange(nodes);
         });
 
         this.setupSubscriptions();
     }
 
+    queueArrange(nodes) {
+        // console.log("queueArrange", nodes);
+        this.arrangeObserver.next(nodes);
+    }
+
     setupSubscriptions() {
         this.canvas.area.addPipe((context) => {
             if (context.type === "noderesize") {
-                // this.arrangeObserver.next(Math.random());
+                // this.arrangeObserver.next(context);
+                // console.log("noderesize", context);
             }
             return context;
         });
@@ -31,13 +39,12 @@ export class CanvasView {
         this.canvas.editor.addPipe((context) => {
             if (
                 [
-                    "nodecreated",
                     "noderemoved",
                     "connectioncreated",
                     "connectionremoved",
                 ].includes(context.type)
             ) {
-                this.arrangeObserver.next(Math.random());
+                this.arrangeObserver.next(this.canvas.editor.getNodes());
             }
             return context;
         });

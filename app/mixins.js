@@ -96,10 +96,11 @@ export const CardStyleMixin = dedupeMixin(
                         box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
                         margin: 15px;
                         padding: 15px;
-                        overflow: hidden;
+                        overflow: auto;
                         transition: max-height 0.5s ease-out,
                             margin 0.5s ease-out, padding 0.5s ease-out;
-                        max-height: 800px; /* default max height */
+                        max-height: 40vh; /* default max height */
+                        max-width: 80vw;
                         cursor: auto;
                     }
 

@@ -41,7 +41,7 @@ const RJSFComponent = CardStyleMixin(
                     }, // Send change events to the Subject
                     validator: validator,
                 };
-                console.log("props?", this.props);
+                // console.log("props?", this.props);
             }
 
             firstUpdated() {

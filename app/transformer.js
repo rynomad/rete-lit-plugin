@@ -308,6 +308,25 @@ class CustomTabs extends LitElement {
         main.selectionlayout dile-pages h2 {
             margin-top: 0;
         }
+        .input-forms {
+            display: flex;
+            flex-direction: row;
+        }
+
+        .form {
+            flex-grow: 1;
+            width: 0px;
+        }
+
+        .form.hide {
+            margin: 0px;
+            padding: 0px;
+        }
+
+        .form.open {
+            width: 100%;
+            min-width: 400px;
+        }
     `;
 
     static properties = {
@@ -334,6 +353,23 @@ class CustomTabs extends LitElement {
         this.requestUpdate();
     }
 
+    closeAll() {
+        this.openPages = [];
+        this.requestUpdate();
+    }
+
+    openSelect(pages) {
+        this.openPages = pages;
+        this.requestUpdate();
+    }
+
+    openUnsubscribed() {
+        this.openPages = this.inputs
+            .filter((i) => !i.subscription && i.schema)
+            .map((i) => i.label);
+        this.requestUpdate();
+    }
+
     render() {
         return html`
             <main class="selectionlayout">
@@ -343,21 +379,25 @@ class CustomTabs extends LitElement {
                     .handleToggle=${this.handleToggle.bind(this)}></tab-header>
 
                 <div class="name-heading">${this.name}</div>
-                ${this.inputs.map((entry) => {
-                    const open = !!this.openPages.find(
-                        (input) => input === entry.label
-                    );
-                    if (entry.html) {
-                        return entry.html(open);
-                    }
-                    console.log(entry);
-                    return html`
-                        <rjsf-component
-                            is-open="${open}"
-                            .props="${entry}"
-                            style="${entry.style}"></rjsf-component>
-                    `;
-                })}
+                <div class="input-forms">
+                    ${this.inputs.map((entry) => {
+                        const open = !!this.openPages.find(
+                            (input) => input === entry.label
+                        );
+                        if (entry.html) {
+                            return entry.html(open);
+                        }
+                        console.log(entry);
+                        return html`
+                            <rjsf-component
+                                is-open="${open}"
+                                .props="${entry}"
+                                class="form ${open
+                                    ? "open"
+                                    : "hide"}"></rjsf-component>
+                        `;
+                    })}
+                </div>
             </main>
         `;
     }
@@ -436,10 +476,23 @@ export class TransformerNode extends LitPresets.classic.Node {
             data: { ...this.data, element: this.element },
         });
 
+        this.data.canvas.view.queueArrange([this.data]);
+        if (this.data.selected) {
+            this.data.canvas.zoom();
+        }
         if (this.onResize) {
             this.onResize();
         }
     }
+
+    openUnsubscribed() {
+        this.shadowRoot.querySelector("custom-tabs").openUnsubscribed();
+    }
+
+    closeAll() {
+        this.shadowRoot.querySelector("custom-tabs").closeAll();
+    }
+
     async initComponent() {
         await this.updateComplete;
 
@@ -567,13 +620,12 @@ export class TransformerNode extends LitPresets.classic.Node {
                     input.showSubmit ? null : input.subject.next(e.formData),
                 onSubmit: (e) => {
                     input.subject.next(e.formData);
-                    this.data.requestSnapshot();
+                    setTimeout(() => this.data.requestSnapshot(), 100);
                 },
                 uiSchema: setSubmitButtonOptions(input.uiSchema, {
                     norender: !input.showSubmit,
                     submitText: "send",
                 }),
-                schema: this.addFrozenProperty(input.schema),
                 formData: input.subject.getValue() || {},
             }))
             .concat({
@@ -581,6 +633,7 @@ export class TransformerNode extends LitPresets.classic.Node {
                 icon: unsafeHTML(icon(fas.faBug).html[0]),
                 html: (open) => html` <transformer-debug-card
                     is-open="${open}"
+                    class="form ${open ? "open" : "hide"}"
                     .inputs="${this.mappedInputs}"
                     .outputs="${this.mappedOutputs}"
                     .intermediates="${this
@@ -601,7 +654,7 @@ export class TransformerNode extends LitPresets.classic.Node {
     }
 
     render() {
-        console.log("rerender TransformNode");
+        // console.log("rerender TransformNode");
         return html`
             <div
                 class="node ${this.data?.selected ? "selected" : ""}"
@@ -711,7 +764,7 @@ export class Transformer extends Classic.Node {
     static intermediates = [];
     static Component = DefaultComponent;
     static childClasses = new Map();
-    static deserialize(ide, data) {
+    static async deserialize(ide, data) {
         // Retrieve the child class constructor based on the class name
         const ChildClass = Transformer.childClasses.get(data.className);
 
@@ -732,6 +785,8 @@ export class Transformer extends Classic.Node {
             }
         }
 
+        await new Promise((r) => setTimeout(r, 1000));
+
         // Restore any other properties from the serialized data
         return transformer;
     }
@@ -750,12 +805,16 @@ export class Transformer extends Classic.Node {
         return Transformer.getSocket(this.canvasId);
     }
 
+    get canvas() {
+        return this.ide.getCanvasById(this.canvasId);
+    }
+
     get editor() {
-        return this.ide.getCanvasById(this.canvasId)?.editor;
+        return this.canvas?.editor;
     }
 
     get area() {
-        return this.ide.getCanvasById(this.canvasId).area;
+        return this.canvas?.area;
     }
 
     get width() {
@@ -781,6 +840,7 @@ export class Transformer extends Classic.Node {
             : dataOrConstructor.name || dataOrConstructor.className;
 
         super(name);
+        this._selected = false;
         this.id = id;
         this.ready = new Promise((r) => (this.readyResolve = r));
         this.ide = ide;
@@ -803,29 +863,49 @@ export class Transformer extends Classic.Node {
         this.postInit();
     }
 
+    get selected() {
+        return this._selected;
+    }
+
+    set selected(value) {
+        this._selected = value;
+        this.canvas.zoom();
+        if (value) {
+            this.editorNode.openUnsubscribed();
+        } else {
+            this.editorNode.closeAll();
+        }
+    }
+
     requestSnapshot() {
         this.ide.getCanvasById(this.canvasId).store.createSnapshot();
     }
 
+    socketKey(label) {
+        return `${this.id}-${label}`;
+    }
+
     addInput(input) {
-        const key = input.key || `${this.id}-${input.label}`;
+        const key = input.key || this.socketKey(input.label);
         input.key = key;
         super.addInput(key, input);
+        this.editorNode?.requestUpdate();
     }
 
     addOutput(output) {
-        const key = output.key || `${this.id}-${output.label}`;
+        const key = output.key || this.socketKey(output.label);
         output.key = key;
         super.addOutput(key, output);
+        this.editorNode?.requestUpdate();
     }
 
     getInput(key) {
-        console.log(key, this.inputs, this.inputs[`${this.id}-${key}`]);
+        // console.log(key, this.inputs, this.inputs[`${this.id}-${key}`]);
         return this.inputs[`${this.id}-${key}`];
     }
 
     getOutput(key) {
-        console.log(key, this.outputs, this.outputs[`${this.id}-${key}`]);
+        // console.log(key, this.outputs, this.outputs[`${this.id}-${key}`]);
         return this.outputs[`${this.id}-${key}`];
     }
 
@@ -836,10 +916,18 @@ export class Transformer extends Classic.Node {
             this.addInput.bind(this)
         );
         this.processIO(
-            this.constructor.outputs,
+            this.constructor.inputs
+                .filter((i) => i.chainable)
+                .concat(this.constructor.outputs),
             true,
             this.addOutput.bind(this)
         );
+        for (const input of Object.values(this.inputs)) {
+            if (input.chainable && input.chainable !== "manual") {
+                input.subject.subscribe(this.getOutput(input.label).subject);
+            }
+        }
+
         this.processIntermediates(this.constructor.intermediates);
         this.transform();
         this.readyResolve();
@@ -870,14 +958,15 @@ export class Transformer extends Classic.Node {
         let listener = Math.random();
 
         this.editor.addPipe((context) => {
+            // console.log("editor pipe spam", context.type);
             if (context.data.target === this.id) {
                 if (context.type === "connectioncreated") {
-                    console.log(
-                        "new connection created",
-                        listener,
-                        this.id,
-                        context
-                    );
+                    // console.log(
+                    //     "new connection created",
+                    //     listener,
+                    //     this.id,
+                    //     context
+                    // );
                     try {
                         this.subscribe(context.data);
                     } catch (error) {
@@ -895,11 +984,13 @@ export class Transformer extends Classic.Node {
     removeInput(key) {
         this.removeConnections(key);
         super.removeInput(key);
+        this.editorNode?.requestUpdate();
     }
 
     removeOutput(key) {
         this.removeConnections(key);
         super.removeOutput(key);
+        this.editorNode?.requestUpdate();
     }
 
     removeConnections(key) {
@@ -939,6 +1030,14 @@ export class Transformer extends Classic.Node {
         };
     }
 
+    hasConnection(label) {
+        return this.editor.connections.some(
+            (c) =>
+                c.targetInput === this.socketKey(label) ||
+                c.sourceOutput === this.socketKey(label)
+        );
+    }
+
     processIO(definitions, multipleConnections, addMethod) {
         for (const def of definitions) {
             const ioConfig = {
@@ -946,7 +1045,8 @@ export class Transformer extends Classic.Node {
                 socket: this.socket,
                 subject: new BehaviorSubject(),
                 validate: this.createValidateFunction(def),
-                multipleConnections: multipleConnections,
+                multipleConnections:
+                    def.multipleConnections || multipleConnections,
             };
             const ioClass = multipleConnections
                 ? TransformerOutput
@@ -957,6 +1057,7 @@ export class Transformer extends Classic.Node {
     }
 
     createValidateFunction(inputDef) {
+        return () => true;
         return (outputDef) => {
             if (!inputDef.schema) return true;
             if (!outputDef.schema) return false;
@@ -975,6 +1076,25 @@ export class Transformer extends Classic.Node {
         // To be overridden by child class
     }
 
+    async createNewMultipleInput(context, targetInput) {
+        let index = 1;
+        while (this.inputs[`${context.targetInput}_${index}`]) {
+            index++;
+        }
+        // create a new input for each connection
+        const newInput = new TransformerInput({
+            ...targetInput,
+            label: targetInput.label + "_" + index,
+            multipleConnections: false,
+            subject: new BehaviorSubject(),
+            key: undefined,
+        });
+        this.addInput(newInput);
+        await this.editor.removeConnection(context.id);
+        context.targetInput = newInput.key;
+        this.editor.addConnection(context);
+    }
+
     async subscribe(context, node) {
         if (context.target !== this.id) return;
         await this.ready;
@@ -984,10 +1104,41 @@ export class Transformer extends Classic.Node {
 
         const sourceNode = node || this.editor.getNode(context.source);
         await sourceNode.ready;
-        const sourceOutput = sourceNode.outputs[context.sourceOutput];
-        const targetInput = this.inputs[context.targetInput];
-        if (!targetInput || !sourceOutput) {
-            debugger;
+        let sourceOutput = sourceNode.outputs[context.sourceOutput];
+        let targetInput = this.inputs[context.targetInput];
+        if (!targetInput) {
+            let prior = context.targetInput.split("_")[0];
+            if (this.inputs[prior]) {
+                context.targetInput = prior;
+                targetInput = this.inputs[prior];
+            } else {
+                targetInput = this.getInput(
+                    context.targetInput.split("-").pop()
+                );
+                if (!targetInput) {
+                    throw new Error("cant find target input");
+                }
+            }
+        }
+
+        // if (!sourceOutput) {
+        //     let prior = context.sourceOutput.split("_")[0];
+        //     if (this.outputs[prior]) {
+        //         context.sourceOutput = prior;
+        //         sourceOutput = this.inputs[prior];
+        //     } else {
+        //         sourceOutput = this.getOutput(
+        //             context.sourceOutput.split("-").pop()
+        //         );
+        //         if (!sourceOutput) {
+        //             throw new Error("cant find source output");
+        //         }
+        //     }
+        // }
+
+        if (targetInput.multipleConnections) {
+            await this.createNewMultipleInput(context, targetInput);
+            return;
         }
 
         // Check if the input already has a subscription

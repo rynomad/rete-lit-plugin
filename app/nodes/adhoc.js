@@ -1,70 +1,42 @@
 import { Transformer } from "../transformer.js";
-
+import { jsonSchema } from "../schemas/json-schema.js";
+import { uiSchema } from "../schemas/ui-schema.js";
+import { SafeSubject as BehaviorSubject } from "../safe-subject.js";
+import * as rxjs from "https://esm.sh/rxjs@7";
 export class AdhocTransformer extends Transformer {
     static inputs = [
         {
-            label: "config",
+            label: "transform",
             showSubmit: true,
             schema: {
                 $schema: "http://json-schema.org/draft-07/schema#",
                 type: "object",
-                required: ["inputs", "outputs", "transform"],
+                required: ["transform"],
                 properties: {
-                    inputs: {
-                        type: "array",
-                        description: "Array of input definitions",
-                        items: {
-                            type: "object",
-                            required: ["label", "schema"],
-                            properties: {
-                                label: {
-                                    type: "string",
-                                    description: "Label for the input",
-                                },
-                                schema: {
-                                    type: "string",
-                                    description:
-                                        "JSON Schema for the input as multiline text",
-                                    format: "textarea",
-                                },
-                                uischema: {
-                                    type: "string",
-                                    description:
-                                        "UI Schema for the input form as multiline text",
-                                    format: "textarea",
-                                },
-                                showSubmit: {
-                                    type: "boolean",
-                                    description: "Show submit button",
-                                    default: false,
-                                },
-                            },
-                        },
-                    },
-                    outputs: {
-                        type: "array",
-                        description: "Array of output definitions",
-                        items: {
-                            type: "object",
-                            required: ["label", "schema"],
-                            properties: {
-                                label: {
-                                    type: "string",
-                                    description: "Label for the output",
-                                },
-                                schema: {
-                                    type: "string",
-                                    description: "JSON Schema for the output",
-                                    format: "textarea",
-                                },
-                            },
-                        },
-                    },
                     transform: {
                         type: "string",
                         description: "Transformation logic as multiline text",
                         format: "textarea",
                     },
+                },
+            },
+            uiSchema: {
+                transform: {
+                    "ui:widget": "textarea",
+                    "ui:options": {
+                        rows: 10,
+                    },
+                },
+            },
+        },
+        {
+            label: "widget",
+            showSubmit: true,
+            schema: {
+                $schema: "http://json-schema.org/draft-07/schema#",
+                type: "object",
+                required: [],
+                properties: {
                     widget: {
                         type: "string",
                         description:
@@ -74,47 +46,6 @@ export class AdhocTransformer extends Transformer {
                 },
             },
             uiSchema: {
-                inputs: {
-                    items: {
-                        label: {
-                            "ui:widget": "text",
-                        },
-                        schema: {
-                            "ui:widget": "textarea",
-                            "ui:options": {
-                                rows: 5,
-                            },
-                        },
-                        uischema: {
-                            "ui:widget": "textarea",
-                            "ui:options": {
-                                rows: 5,
-                            },
-                        },
-                        showSubmit: {
-                            "ui:widget": "checkbox",
-                        },
-                    },
-                },
-                outputs: {
-                    items: {
-                        label: {
-                            "ui:widget": "text",
-                        },
-                        schema: {
-                            "ui:widget": "textarea",
-                            "ui:options": {
-                                rows: 5,
-                            },
-                        },
-                    },
-                },
-                transform: {
-                    "ui:widget": "textarea",
-                    "ui:options": {
-                        rows: 10,
-                    },
-                },
                 widget: {
                     "ui:widget": "textarea",
                     "ui:options": {
@@ -125,37 +56,53 @@ export class AdhocTransformer extends Transformer {
         },
     ];
 
+    getInput(label) {
+        let input = super.getInput(label);
+        if (!input) {
+            this.addInput({
+                label,
+                socket: this.socket,
+                subject: new BehaviorSubject(),
+                validate: () => true,
+            });
+            return this.getInput(label);
+        }
+
+        return input;
+    }
+
+    getOutput(label) {
+        let output = super.getOutput(label);
+        if (!output) {
+            this.addOutput({
+                label,
+                socket: this.socket,
+                subject: new BehaviorSubject(),
+                validate: () => true,
+            });
+            return this.getOutput(label);
+        }
+        return output;
+    }
+
+    clearIO() {
+        for (const key in this.inputs) {
+            if (key.endsWith("transform") || key.endsWith("widget")) continue;
+            this.removeInput(key);
+        }
+
+        for (const key in this.outputs) {
+            this.removeOutput(key);
+        }
+    }
+
     // Implementation of the transform method and other methods
     async transform() {
         // Your custom implementation here
-        this.subscribtion = this.getInput("config").subject.subscribe(
+        this.subscribtion = this.getInput("transform").subject.subscribe(
             async (config) => {
                 if (!config) return;
-                this.clearIO();
                 this.transformCleanup?.();
-
-                this.processIO(
-                    config.inputs.map(
-                        ({ label, schema, uischema, showSubmit }) => ({
-                            label,
-                            schema: JSON.parse(schema),
-                            uischema: uischema
-                                ? JSON.parse(uischema)
-                                : undefined,
-                            showSubmit,
-                        })
-                    ),
-                    false,
-                    this.addInput.bind(this)
-                );
-                this.processIO(
-                    config.outputs.map(({ label, schema }) => ({
-                        label,
-                        schema: JSON.parse(schema),
-                    })),
-                    true,
-                    this.addOutput.bind(this)
-                );
 
                 this.transformCleanup =
                     await this.createAsyncFunctionFromString(config.transform);
@@ -165,10 +112,12 @@ export class AdhocTransformer extends Transformer {
 
     createAsyncFunctionFromString(bodyString) {
         const asyncFunction = new Function(
+            "rxjs",
             "return (async function() {" + bodyString + "}).bind(this);"
         );
 
-        return asyncFunction.call(this)();
+        // Then call the function and pass rxjs as an argument
+        return asyncFunction.call(this, rxjs)();
     }
 }
 

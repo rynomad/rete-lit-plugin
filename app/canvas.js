@@ -27,7 +27,6 @@ import { DockPlugin, DockPresets } from "https://esm.sh/rete-dock-plugin";
 import "https://esm.sh/@dile/dile-pages/dile-pages.js";
 import "https://esm.sh/@dile/dile-tabs/dile-tabs.js";
 import { Transformer, TransformerNode } from "./transformer.js";
-import { OpenAITransformer, PromptTransformer } from "./nodes/openai.js";
 import { BetterDomSocketPosition } from "./socket-position.js";
 import { Connection } from "./connection.js";
 import { CanvasStore } from "./canvas-store.js";
@@ -137,7 +136,7 @@ export class Canvas {
 
                 if (data.side === "output") {
                     return {
-                        x: (data.index * 2 + 1) * spacing,
+                        x: data.width / 2,
                         y: 0,
                         width: 15,
                         height: 15,
@@ -145,7 +144,7 @@ export class Canvas {
                     };
                 }
                 return {
-                    x: (data.index * 2 + 1) * spacing,
+                    x: data.width / 2,
                     y: 0,
                     width: 15,
                     height: 15,
@@ -157,23 +156,43 @@ export class Canvas {
         this.applier = new ArrangeAppliers.TransitionApplier({
             duration: 500,
             timingFunction: (t) => t,
-            onTick: async () => {
-                await AreaExtensions.zoomAt(this.area, this.editor.getNodes());
+            onTick: () => {
+                // if (this.getZoomNodes().some((node) => node.selected)) {
+                //     this.zoom();
+                // }
             },
         });
     }
 
-    async layoutArrange() {
+    async layoutArrange(nodes = this.editor.getNodes()) {
+        // console.log("layout");
+        this.zoomNodes = this.getZoomNodes(nodes);
         this.arrange.layout({
             applier: this.applier,
             options: { "elk.direction": "DOWN" },
         }); // Include your existing code for arranging layout here.
-        AreaExtensions.zoomAt(this.area, this.editor.getNodes());
+        if (!this.firstZoom) {
+            this.zoom();
+            this.firstZoom = true;
+        }
+    }
+
+    zoom() {
+        this.zoomNodes = this.getZoomNodes();
+        AreaExtensions.zoomAt(this.area, this.zoomNodes);
+    }
+
+    getZoomNodes() {
+        const nodes = this.editor.getNodes();
+        return nodes.some((node) => node.selected)
+            ? nodes.filter((node) => node.selected)
+            : this.editor.getNodes();
     }
 
     async attach(container) {
         this.container = container;
         await this.initialize();
+        AreaExtensions.zoomAt(this.area, this.editor.getNodes());
     }
 
     destroy() {
