@@ -758,6 +758,7 @@ function isClassConstructor(variable) {
     return false;
 }
 export class Transformer extends Classic.Node {
+    static globals = new Map();
     static _sockets = {};
     static inputs = [];
     static outputs = [];
@@ -1053,6 +1054,21 @@ export class Transformer extends Classic.Node {
                 : TransformerInput;
             const ioInstance = new ioClass(ioConfig);
             addMethod(ioInstance);
+
+            if (ioConfig.global) {
+                const className = this.constructor.toString().match(/\w+/g)[1];
+                const globalSubject =
+                    this.constructor.globals.get(
+                        `${className}-${ioConfig.label}`
+                    ) || new BehaviorSubject(true);
+
+                ioInstance.subject.subscribe(globalSubject);
+                globalSubject.subscribe(ioInstance.subject);
+                this.constructor.globals.set(
+                    `${className}-${ioConfig.label}`,
+                    globalSubject
+                );
+            }
         }
     }
 

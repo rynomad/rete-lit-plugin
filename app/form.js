@@ -50,6 +50,10 @@ const RJSFComponent = CardStyleMixin(
                     "https://esm.sh/bootstrap@4/dist/css/bootstrap.min.css";
                 reactWrapper.reactComponent = Form;
                 reactWrapper.props = { ...this._props, ...this.props };
+                reactWrapper.props.subject.subscribe((e) => {
+                    console.log("react-wrapper", e);
+                    reactWrapper.props = { ...reactWrapper.props, formData: e };
+                });
                 console.log(reactWrapper.props);
                 this.appendChild(reactWrapper);
             }

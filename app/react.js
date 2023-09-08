@@ -32,16 +32,26 @@ class ReactWrapper extends LitElement {
         this.renderReactComponent();
     }
 
+    updated(changedProperties) {
+        // React will efficiently update the component when the same ReactDOM.render() is called
+        // on the existing container, keeping the internal state intact.
+        if (changedProperties.has("props")) {
+            this.renderReactComponent();
+        }
+    }
+
     renderReactComponent() {
-        ReactDOM.render(
-            React.createElement(this.reactComponent, this.props),
-            this.reactRoot
-        );
+        if (this.reactComponent && this.reactRoot) {
+            ReactDOM.render(
+                React.createElement(this.reactComponent, this.props),
+                this.reactRoot
+            );
+        }
     }
 
     render() {
         console.log("render react");
-        return html`<div id="react-root"></div>`; // Removing link tag from render since we're handling it in firstUpdated
+        return html`<div id="react-root"></div>`;
     }
 }
 
