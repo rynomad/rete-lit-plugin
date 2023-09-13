@@ -44,6 +44,7 @@ export class CanvasView {
                     "connectionremoved",
                 ].includes(context.type)
             ) {
+                console.log("noderemoved", context.data);
                 this.arrangeObserver.next(this.canvas.editor.getNodes());
             }
             return context;

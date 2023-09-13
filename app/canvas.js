@@ -1,5 +1,8 @@
 import { ClassicPreset as Classic, NodeEditor } from "https://esm.sh/rete";
-import { AreaExtensions, AreaPlugin } from "https://esm.sh/rete-area-plugin";
+import {
+    AreaExtensions,
+    AreaPlugin,
+} from "https://esm.sh/rete-area-plugin@2.0.0";
 import {
     LitPlugin,
     Presets as LitPresets,
@@ -31,6 +34,7 @@ import { BetterDomSocketPosition } from "./socket-position.js";
 import { Connection } from "./connection.js";
 import { CanvasStore } from "./canvas-store.js";
 import { CanvasView } from "./canvas-view.js";
+import { BehaviorSubject } from "https://esm.sh/rxjs";
 
 export class Canvas {
     constructor(ide, { canvasId, name } = {}) {
@@ -119,6 +123,12 @@ export class Canvas {
         RerouteExtensions.selectablePins(reroutePlugin, selector, accumulating);
 
         this.view = new CanvasView(this);
+
+        this.editorStream = new BehaviorSubject();
+        this.editor.addPipe((context) => {
+            this.editorStream.next(context);
+            return context;
+        });
     }
 
     async initialize() {

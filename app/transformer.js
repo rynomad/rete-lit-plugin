@@ -9,7 +9,8 @@ import "https://esm.sh/@dile/dile-tabs/dile-tabs.js";
 import { sanitizeAndRenderYaml } from "./util.js";
 import { PropagationStopper, CardStyleMixin } from "./mixins.js";
 import { SafeSubject as BehaviorSubject } from "./safe-subject.js";
-
+import * as rxjs from "https://esm.sh/rxjs@7";
+import { map } from "https://esm.sh/rxjs";
 import {
     LitPlugin,
     Presets as LitPresets,
@@ -32,7 +33,7 @@ export class TransformerInput extends Classic.Input {
         super(
             inputConfig.socket,
             inputConfig.hash || inputConfig.label,
-            inputConfig.multipleConnections
+            !!inputConfig.multipleConnections
         );
 
         // Assign all properties from the inputConfig object to this class instance
@@ -387,7 +388,7 @@ class CustomTabs extends LitElement {
                         if (entry.html) {
                             return entry.html(open);
                         }
-                        console.log(entry);
+                        // console.log(entry);
                         return html`
                             <rjsf-component
                                 is-open="${open}"
@@ -478,7 +479,7 @@ export class TransformerNode extends LitPresets.classic.Node {
 
         this.data.canvas.view.queueArrange([this.data]);
         if (this.data.selected) {
-            this.data.canvas.zoom();
+            // this.data.canvas.zoom();
         }
         if (this.onResize) {
             this.onResize();
@@ -930,6 +931,9 @@ export class Transformer extends Classic.Node {
         }
 
         this.processIntermediates(this.constructor.intermediates);
+
+        this.incoming = new BehaviorSubject([]);
+        this.outgoing = new BehaviorSubject([]);
         this.transform();
         this.readyResolve();
     }
@@ -945,6 +949,43 @@ export class Transformer extends Classic.Node {
         }
     }
 
+    getAllIncomingEdges() {
+        return this.editor
+            .getConnections()
+            .filter((c) => c.target === this.id)
+            .map((c) => ({
+                connection: c,
+                input: this.inputs[c.targetInput],
+                output: this.editor.getNode(c.source).outputs[c.sourceOutput],
+            }));
+    }
+
+    getAllOutgoingEdges() {
+        return this.editor
+            .getConnections()
+            .filter((c) => c.source === this.id)
+            .map((c) => ({
+                connection: c,
+                input: this.editor.getNode(c.target).inputs[c.targetInput],
+                output: this.outputs[c.sourceOutput],
+            }));
+    }
+
+    multiInputsToObject(operation, observablesArray) {
+        const labels = observablesArray.map((item) => item.label);
+        const observables = observablesArray.map((item) => item.subject.read);
+
+        return rxjs[operation](observables).pipe(
+            map((values) => {
+                const combinedObject = {};
+                for (let i = 0; i < labels.length; i++) {
+                    combinedObject[labels[i]] = values[i];
+                }
+                return combinedObject;
+            })
+        );
+    }
+
     async postInit() {
         //   debugger
         if (this.constructor.Component) {
@@ -955,8 +996,6 @@ export class Transformer extends Classic.Node {
         while (!this.editor) {
             await new Promise((resolve) => setTimeout(resolve, 100));
         }
-
-        let listener = Math.random();
 
         this.editor.addPipe((context) => {
             // console.log("editor pipe spam", context.type);
@@ -977,6 +1016,10 @@ export class Transformer extends Classic.Node {
                 } else if (context.type === "connectionremoved") {
                     this.unsubscribe(context.data);
                 }
+
+                this.incoming.next(this.getAllIncomingEdges());
+            } else if (context.data.source === this.id) {
+                this.outgoing.next(this.getAllOutgoingEdges());
             }
             return context;
         });
@@ -1048,6 +1091,7 @@ export class Transformer extends Classic.Node {
                 validate: this.createValidateFunction(def),
                 multipleConnections:
                     def.multipleConnections || multipleConnections,
+                node: this,
             };
             const ioClass = multipleConnections
                 ? TransformerOutput
@@ -1092,36 +1136,73 @@ export class Transformer extends Classic.Node {
         // To be overridden by child class
     }
 
-    async createNewMultipleInput(context, targetInput) {
-        let index = 1;
-        while (this.inputs[`${context.targetInput}_${index}`]) {
-            index++;
+    lockQueue = Promise.resolve();
+
+    async createNewMultipleInput(context, targetInput, index) {
+        // const unlock = await this.lock();
+
+        try {
+            if (index) {
+                if (this.inputs[`${context.targetInput}_${index}`]) {
+                    // do nothing, input already exists
+                    return;
+                }
+            } else {
+                index = 1;
+                while (this.inputs[`${context.targetInput}_${index}`]) {
+                    index++;
+                }
+            }
+
+            const newInput = new TransformerInput({
+                ...targetInput,
+                label: targetInput.label + "_" + index,
+                multipleConnections: false,
+                subject: new BehaviorSubject(),
+                key: undefined,
+            });
+
+            this.addInput(newInput);
+
+            await this.editor.removeConnection(context.id);
+
+            const newConnection = {
+                id: getUID(),
+                source: context.source,
+                sourceOutput: context.sourceOutput,
+                target: this.id,
+                targetInput: newInput.key,
+            };
+
+            this.editor.addConnection(newConnection);
+        } finally {
+            // unlock();
         }
-        // create a new input for each connection
-        const newInput = new TransformerInput({
-            ...targetInput,
-            label: targetInput.label + "_" + index,
-            multipleConnections: false,
-            subject: new BehaviorSubject(),
-            key: undefined,
+    }
+
+    lock() {
+        let unlockNext;
+
+        // Add new lock to the queue
+        const lock = new Promise((unlock) => {
+            unlockNext = unlock;
         });
-        this.addInput(newInput);
-        await this.editor.removeConnection(context.id);
-        context.targetInput = newInput.key;
-        this.editor.addConnection(context);
+
+        const lockPromise = this.lockQueue.then(() => unlockNext);
+        this.lockQueue = this.lockQueue.then(() => lock);
+
+        return lockPromise;
     }
 
     async subscribe(context, node) {
         if (context.target !== this.id) return;
         await this.ready;
-        if (context.target === "d1d3c91b3fef5219") {
-            debugger;
-        }
 
         const sourceNode = node || this.editor.getNode(context.source);
         await sourceNode.ready;
         let sourceOutput = sourceNode.outputs[context.sourceOutput];
         let targetInput = this.inputs[context.targetInput];
+        let index = context.targetInput.split("_")[1];
         if (!targetInput) {
             let prior = context.targetInput.split("_")[0];
             if (this.inputs[prior]) {
@@ -1136,30 +1217,32 @@ export class Transformer extends Classic.Node {
                 }
             }
         }
-
-        // if (!sourceOutput) {
-        //     let prior = context.sourceOutput.split("_")[0];
-        //     if (this.outputs[prior]) {
-        //         context.sourceOutput = prior;
-        //         sourceOutput = this.inputs[prior];
-        //     } else {
-        //         sourceOutput = this.getOutput(
-        //             context.sourceOutput.split("-").pop()
-        //         );
-        //         if (!sourceOutput) {
-        //             throw new Error("cant find source output");
-        //         }
-        //     }
-        // }
-
-        if (targetInput.multipleConnections) {
-            await this.createNewMultipleInput(context, targetInput);
-            return;
-        }
-
         // Check if the input already has a subscription
         if (targetInput.subscription) {
-            throw new Error("Input already has a subscription.");
+            if (!targetInput.multipleConnections) {
+                throw new Error("Input already has a subscription.");
+            }
+
+            targetInput.subscription?.unsubscribe();
+            targetInput.multiInputs = this.editor
+                .getConnections()
+                .filter((c) => {
+                    return (
+                        c.targetInput === targetInput.key &&
+                        c.target === this.id
+                    );
+                })
+                .map((c) => {
+                    const sourceNode = this.editor.getNode(c.source);
+                    let sourceOutput = sourceNode.outputs[c.sourceOutput];
+                    return sourceOutput;
+                });
+
+            targetInput.subscription = this.multiInputsToObject(
+                targetInput.multipleConnections,
+                targetInput.multiInputs
+            ).subscribe((v) => targetInput.subject.next(v));
+            return;
         }
 
         // Validate the schema

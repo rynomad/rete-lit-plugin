@@ -70,9 +70,10 @@ class OpenAIRenderer extends LitElement {
                 !this.node.getInput("prompt").subscription &&
                 !this.promptStream
             ) {
-                this.promptStream = this.node
-                    .getInput("prompt")
-                    .subject.pipe(map((e) => e.content));
+                this.promptStream = this.node.getInput("prompt").subject.pipe(
+                    filter((e) => e),
+                    map((e) => e.content)
+                );
                 this.requestUpdate();
             } else if (
                 this.node.getInput("prompt").subscription &&
@@ -294,6 +295,7 @@ export class OpenAITransformer extends Transformer {
 
     transform() {
         let lastStream = null;
+        this.functions = new BehaviorSubject([]);
         combineLatest([
             this.getInput("api_key").subject.pipe(
                 filter((i) => i?.api_key),
@@ -308,94 +310,128 @@ export class OpenAITransformer extends Transformer {
                 map((e) => (e ? e : []))
             ),
             this.getInput("prompt").subject.pipe(filter((i) => i)),
+            this.functions.pipe(filter((i) => i)),
         ])
             .pipe(
-                mergeMap(async ([api_key, config, history, prompt]) => {
-                    history =
-                        config.chooser === "single"
-                            ? history.map((i) => {
-                                  if (!Array.isArray(i)) return i;
+                mergeMap(
+                    async ([api_key, config, history, prompt, functions]) => {
+                        history =
+                            config.chooser === "single"
+                                ? history.map((i) => {
+                                      if (!Array.isArray(i)) return i;
 
-                                  return i[i.length - 1];
-                              })
-                            : history.flat();
+                                      return i[i.length - 1];
+                                  })
+                                : history.flat();
 
-                    const messages = [...history, { role: "user", ...prompt }];
-                    // console.log("openai", config, history, prompt);
-                    try {
-                        this.openai =
-                            this.openai ||
-                            new OpenAI({
-                                apiKey: api_key,
-                                dangerouslyAllowBrowser: true,
-                            });
-                        if (lastStream) {
-                            await lastStream.controller.abort();
-                        }
-
-                        const remainder = config.quantity - 1;
-
-                        const stream = (lastStream =
-                            await this.openai.chat.completions.create({
-                                model: config.model,
-                                messages,
-                                temperature: config.temperature,
-                                stream: config.stream,
-                            }));
-
-                        let outputStream = new BehaviorSubject("");
-                        this.getOutput("stream").subject.next(outputStream);
-                        let streamDone = false;
-
-                        let content = "";
-
-                        let allResponses = await Promise.all([
-                            (async () => {
-                                for await (const part of stream) {
-                                    const delta =
-                                        part.choices[0]?.delta?.content || "";
-                                    content += delta;
-                                    outputStream.next(content);
-                                }
-                                return content;
-                            })(),
-                            (async () => {
-                                if (remainder > 0) {
-                                    const e =
-                                        await this.openai.chat.completions.create(
-                                            {
-                                                model: config.model,
-                                                messages,
-                                                temperature: config.temperature,
-                                                n: remainder,
-                                            }
-                                        );
-                                    const choices = e.choices.map(
-                                        (e) => e.message.content
-                                    );
-                                    return choices;
-                                }
-                                return [];
-                            })(),
-                        ]);
-                        allResponses = allResponses
-                            .flat()
-                            .map((content) => ({ role: "assistant", content }));
-
-                        return [
-                            ...messages,
-                            allResponses.length > 1
-                                ? allResponses
-                                : allResponses[0],
+                        const messages = [
+                            ...history,
+                            { role: "user", ...prompt },
                         ];
-                    } catch (e) {
-                        console.error(e);
-                        this.openai = null;
+                        // console.log("openai", config, history, prompt);
+                        try {
+                            this.openai =
+                                this.openai ||
+                                new OpenAI({
+                                    apiKey: api_key,
+                                    dangerouslyAllowBrowser: true,
+                                });
+                            if (lastStream) {
+                                await lastStream.controller.abort();
+                            }
+
+                            const remainder = config.quantity - 1;
+
+                            const stream = (lastStream =
+                                await this.openai.chat.completions.create({
+                                    model: config.model,
+                                    messages,
+                                    temperature: config.temperature,
+                                    stream: functions.length > 0 ? false : true,
+                                    functions,
+                                    function_call: functions.length
+                                        ? { name: functions[0].name }
+                                        : undefined,
+                                }));
+
+                            let outputStream = new BehaviorSubject("");
+                            this.getOutput("stream").subject.next(outputStream);
+                            let streamDone = false;
+
+                            let content = "";
+
+                            let allResponses = await Promise.all([
+                                (async () => {
+                                    for await (const part of stream) {
+                                        const delta =
+                                            part.choices[0]?.delta?.content ||
+                                            "";
+                                        content += delta;
+                                        outputStream.next(content);
+                                    }
+                                    return content;
+                                })(),
+                                (async () => {
+                                    if (remainder > 0) {
+                                        const e =
+                                            await this.openai.chat.completions.create(
+                                                {
+                                                    model: config.model,
+                                                    messages,
+                                                    temperature:
+                                                        config.temperature,
+                                                    n: remainder,
+                                                }
+                                            );
+                                        const choices = e.choices.map(
+                                            (e) => e.message.content
+                                        );
+                                        return choices;
+                                    }
+                                    return [];
+                                })(),
+                            ]);
+                            allResponses = allResponses
+                                .flat()
+                                .map((content) => ({
+                                    role: "assistant",
+                                    content,
+                                }));
+
+                            return [
+                                ...messages,
+                                allResponses.length > 1
+                                    ? allResponses
+                                    : allResponses[0],
+                            ];
+                        } catch (e) {
+                            console.error(e);
+                            this.openai = null;
+                        }
                     }
-                }),
+                ),
                 filter((e) => e)
             )
             .subscribe(this.getOutput("history").subject);
+
+        this.outgoing
+            .pipe(
+                filter(
+                    (e) =>
+                        e &&
+                        e.some((e) => e.output === this.getOutput("function"))
+                ),
+                map((e) =>
+                    e
+                        .filter((e) => e.output === this.getOutput("function"))
+                        .map((e) => ({
+                            name: e.input.label,
+                            description: e.input.description,
+                            parameters: e.input.schema,
+                        }))
+                )
+            )
+            .subscribe(this.functions);
     }
 }
 
