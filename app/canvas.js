@@ -34,7 +34,7 @@ import { BetterDomSocketPosition } from "./socket-position.js";
 import { Connection } from "./connection.js";
 import { CanvasStore } from "./canvas-store.js";
 import { CanvasView } from "./canvas-view.js";
-import { BehaviorSubject } from "https://esm.sh/rxjs";
+import { BehaviorSubject, first, share } from "https://esm.sh/rxjs";
 
 export class Canvas {
     constructor(ide, { canvasId, name } = {}) {
@@ -46,6 +46,9 @@ export class Canvas {
         this.snapshots = this.store.snapshots;
         this.container = null;
         this.editor = new NodeEditor();
+        this.ready$ = new Promise((resolve) =>
+            this.store.updates.pipe(first((v) => v === true)).subscribe(resolve)
+        );
     }
     generateGUID() {
         return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(

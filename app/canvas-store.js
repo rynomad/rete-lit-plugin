@@ -45,6 +45,7 @@ export class CanvasStore {
         this.db = this.constructor.db;
         this.getDB = this.constructor.getDB.bind(this);
         this.snapshots = new SafeSubject(true);
+        this.updates = new SafeSubject(true);
 
         // Initialize the state manager
         this.init();
@@ -271,9 +272,16 @@ export class CanvasStore {
             })
         );
 
+        await new Promise(requestIdleCallback);
+        this.updates.next(true);
+
         await Promise.all(
             snapshot.connections.map(async (connection) => {
-                if (!currentConnections.find((c) => c.id === connection.id)) {
+                if (
+                    !currentConnections.find((c) => c.id === connection.id) &&
+                    snapshot.nodes.find((n) => n.id === connection.source) &&
+                    snapshot.nodes.find((n) => n.id === connection.target)
+                ) {
                     await this.editor.addConnection(connection);
                 }
             })

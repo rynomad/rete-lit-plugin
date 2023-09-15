@@ -102,3 +102,36 @@ const switchMapToLatest = (asyncTask) => (source) => {
         });
     });
 };
+
+export async function hashPOJO(obj) {
+    // Sort object keys to ensure consistent hashing
+    const sortedObj = JSON.stringify(sortObjectKeys(obj));
+
+    // Convert JSON string to a buffer
+    const msgBuffer = new TextEncoder().encode(sortedObj);
+
+    // Hash the buffer using SHA-256
+    const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+
+    // Convert the hash to a string
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    return hashHex;
+}
+
+function sortObjectKeys(obj) {
+    if (obj === null || typeof obj !== "object") {
+        return obj;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(sortObjectKeys);
+    }
+    return Object.keys(obj)
+        .sort()
+        .reduce((result, key) => {
+            result[key] = sortObjectKeys(obj[key]);
+            return result;
+        }, {});
+}

@@ -33,6 +33,9 @@ export class MetadataComponent extends LitElement {
         super();
         this.subject = new BehaviorSubject({ name: "", description: "" });
         this.subscription = null;
+        this.deferredUpdate = null;
+        this.currentName = "";
+        this.currentDescription = "";
     }
 
     connectedCallback() {
@@ -81,14 +84,48 @@ export class MetadataComponent extends LitElement {
         }
     }
 
-    updateName(e) {
-        const currentVal = this.subject.getValue();
-        this.subject.next({ ...currentVal, name: e.target.innerText });
+    onInput(event) {
+        if (event.target.id === "name") {
+            this.currentName = event.target.innerText;
+        } else {
+            this.currentDescription = event.target.innerText;
+        }
     }
 
-    updateDescription(e) {
+    onFocus() {
+        if (this.deferredUpdate) {
+            clearTimeout(this.deferredUpdate);
+            this.deferredUpdate = null;
+        }
+    }
+
+    onBlur(event) {
+        this.deferredUpdate = setTimeout(() => {
+            this.subject.next({
+                name:
+                    this.shadowRoot.getElementById("name")?.innerText ||
+                    "New Magic Node",
+                description:
+                    this.shadowRoot.getElementById("description")?.innerText ||
+                    "",
+            });
+        }, 50);
+    }
+
+    updateName() {
         const currentVal = this.subject.getValue();
-        this.subject.next({ ...currentVal, description: e.target.innerText });
+        this.subject.next({
+            name: this.currentName,
+            description: currentVal.description,
+        });
+    }
+
+    updateDescription() {
+        const currentVal = this.subject.getValue();
+        this.subject.next({
+            name: currentVal.name,
+            description: this.currentDescription,
+        });
     }
 
     render() {
@@ -98,14 +135,18 @@ export class MetadataComponent extends LitElement {
                 id="name"
                 class="text-input"
                 contenteditable
-                @input=${this.updateName}>
+                @input=${this.onInput}
+                @focus=${this.onFocus}
+                @blur=${this.onBlur}>
                 ${name}
             </div>
             <div
                 id="description"
                 class="text-input description"
                 contenteditable
-                @input=${this.updateDescription}>
+                @input=${this.onInput}
+                @focus=${this.onFocus}
+                @blur=${this.onBlur}>
                 ${description}
             </div>
         `;

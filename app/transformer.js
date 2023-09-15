@@ -10,7 +10,17 @@ import { sanitizeAndRenderYaml } from "./util.js";
 import { PropagationStopper, CardStyleMixin } from "./mixins.js";
 import { SafeSubject as BehaviorSubject } from "./safe-subject.js";
 import * as rxjs from "https://esm.sh/rxjs@7";
-import { map } from "https://esm.sh/rxjs";
+import {
+    map,
+    filter,
+    tap,
+    take,
+    timeout,
+    of,
+    catchError,
+} from "https://esm.sh/rxjs";
+import Ajv from "https://esm.sh/ajv@8.6.2";
+import Swal from "https://esm.sh/sweetalert2@11.1.0";
 import {
     LitPlugin,
     Presets as LitPresets,
@@ -69,7 +79,7 @@ const TransformerDebugCard = PropagationStopper(
 
             static styles = css`
                 :host {
-                    max-width: 500px;
+                    max-width: 70vw;
                 }
                 .debug-header {
                     background-color: #f0f0f0; /* Adjust as needed */
@@ -82,13 +92,14 @@ const TransformerDebugCard = PropagationStopper(
                 .scrollable-area {
                     overflow-y: auto; // enables scrollbar
                     flex-grow: 1;
-                    max-height: 500px;
+                    max-height: 70vh;
                 }
                 table {
                     background-color: #fafafa;
                     border: 1px solid #ccc;
                     width: 100%;
                     border-collapse: collapse;
+                    text-align: left;
                 }
 
                 thead th {
@@ -104,7 +115,7 @@ const TransformerDebugCard = PropagationStopper(
 
                 th:nth-child(2),
                 td:nth-child(2) {
-                    width: 50px; /* Fixed width for "Label" column */
+                    width: 150px; /* Fixed width for "Label" column */
                 }
 
                 tbody tr td:nth-child(1) div,
@@ -187,7 +198,7 @@ const TransformerDebugCard = PropagationStopper(
                     return html`
                         <tr>
                             <td><div>${type}</div></td>
-                            <td><div>${entry.label}</div></td>
+                            <td><div>${entry.label || entry.name}</div></td>
                             <td><pre>${formattedValue}</pre></td>
                         </tr>
                     `;
@@ -375,29 +386,32 @@ class CustomTabs extends LitElement {
         return html`
             <main class="selectionlayout">
                 <tab-header
-                    .inputs=${this.inputs}
+                    .inputs=${this.inputs.filter((i) => i.display !== false)}
                     .openPages=${this.openPages}
                     .handleToggle=${this.handleToggle.bind(this)}></tab-header>
 
                 <div class="name-heading">${this.name}</div>
                 <div class="input-forms">
-                    ${this.inputs.map((entry) => {
-                        const open = !!this.openPages.find(
-                            (input) => input === entry.label
-                        );
-                        if (entry.html) {
-                            return entry.html(open);
-                        }
-                        // console.log(entry);
-                        return html`
-                            <rjsf-component
-                                is-open="${open}"
-                                .props="${entry}"
-                                class="form ${open
-                                    ? "open"
-                                    : "hide"}"></rjsf-component>
-                        `;
-                    })}
+                    ${this.inputs
+                        .filter((entry) => entry.display !== false)
+                        .map((entry) => {
+                            console.log(entry);
+                            const open = !!this.openPages.find(
+                                (input) => input === entry.label
+                            );
+                            if (entry.html) {
+                                return entry.html(open);
+                            }
+                            // console.log(entry);
+                            return html`
+                                <rjsf-component
+                                    is-open="${open}"
+                                    .props="${entry}"
+                                    class="form ${open
+                                        ? "open"
+                                        : "hide"}"></rjsf-component>
+                            `;
+                        })}
                 </div>
             </main>
         `;
@@ -484,14 +498,6 @@ export class TransformerNode extends LitPresets.classic.Node {
         if (this.onResize) {
             this.onResize();
         }
-    }
-
-    openUnsubscribed() {
-        this.shadowRoot.querySelector("custom-tabs").openUnsubscribed();
-    }
-
-    closeAll() {
-        this.shadowRoot.querySelector("custom-tabs").closeAll();
     }
 
     async initComponent() {
@@ -614,32 +620,20 @@ export class TransformerNode extends LitPresets.classic.Node {
     }
 
     get mappedInputsWithDebug() {
-        return this.inputs()
-            .map(([key, input]) => ({
-                ...input,
-                onChange: (e) =>
-                    input.showSubmit ? null : input.subject.next(e.formData),
-                onSubmit: (e) => {
-                    input.subject.next(e.formData);
-                    setTimeout(() => this.data.requestSnapshot(), 100);
-                },
-                uiSchema: setSubmitButtonOptions(input.uiSchema, {
-                    norender: !input.showSubmit,
-                    submitText: "send",
-                }),
-                formData: input.subject.getValue() || {},
-            }))
-            .concat({
-                label: "debug",
-                icon: unsafeHTML(icon(fas.faBug).html[0]),
-                html: (open) => html` <transformer-debug-card
-                    is-open="${open}"
-                    class="form ${open ? "open" : "hide"}"
-                    .inputs="${this.mappedInputs}"
-                    .outputs="${this.mappedOutputs}"
-                    .intermediates="${this
-                        .mappedIntermediates}"></transformer-debug-card>`,
-            });
+        return this.inputs().map(([key, input]) => ({
+            ...input,
+            onChange: (e) =>
+                input.showSubmit ? null : input.subject.next(e.formData),
+            onSubmit: (e) => {
+                input.subject.next(e.formData);
+                setTimeout(() => this.data.requestSnapshot(), 100);
+            },
+            uiSchema: setSubmitButtonOptions(input.uiSchema, {
+                norender: !input.showSubmit,
+                submitText: "send",
+            }),
+            formData: input.subject.getValue() || {},
+        }));
     }
 
     addFrozenProperty(schema) {
@@ -663,44 +657,30 @@ export class TransformerNode extends LitPresets.classic.Node {
                 <div class="flex-column">
                     <div class="flex-row input-sockets">
                         <!-- Inputs -->
-                        ${this.mappedInputs.map(
-                            (input) => html`
-                                <div
-                                    class="socket-column"
-                                    data-testid="input-${input.key}">
-                                    <ref-element
-                                        class="input-socket"
-                                        .data=${{
-                                            type: "socket",
-                                            side: "input",
-                                            key: input.key,
-                                            nodeId: this.data?.id,
-                                            payload: input.socket,
-                                        }}
-                                        .emit=${this.emit}
-                                        data-testid="input-socket"></ref-element>
-                                </div>
-                            `
-                        )}
-                        <div class="socket-column" style="flex-grow: 0">
-                            <div style="width: 50px"></div>
-                        </div>
+                        ${this.mappedInputs
+                            .filter((entry) => entry.display !== false)
+                            .map(
+                                (input) => html`
+                                    <div
+                                        class="socket-column"
+                                        data-testid="input-${input.key}">
+                                        <ref-element
+                                            class="input-socket"
+                                            .data=${{
+                                                type: "socket",
+                                                side: "input",
+                                                key: input.key,
+                                                nodeId: this.data?.id,
+                                                payload: input.socket,
+                                            }}
+                                            .emit=${this.emit}
+                                            data-testid="input-socket"></ref-element>
+                                    </div>
+                                `
+                            )}
                     </div>
-                    <custom-tabs
-                        .inputs=${this.mappedInputsWithDebug}
-                        .name=${this.data.name}></custom-tabs>
 
                     <slot></slot>
-
-                    <div class="flex-row">
-                        ${this.outputs().map(
-                            ([key, output]) => html`<div
-                                class="output-title"
-                                data-testid="output-title">
-                                ${output.label}
-                            </div>`
-                        )}
-                    </div>
 
                     <div class="flex-row output-sockets">
                         <!-- Outputs -->
@@ -872,11 +852,6 @@ export class Transformer extends Classic.Node {
     set selected(value) {
         this._selected = value;
         this.canvas.zoom();
-        if (value) {
-            this.editorNode.openUnsubscribed();
-        } else {
-            this.editorNode.closeAll();
-        }
     }
 
     requestSnapshot() {
@@ -1082,6 +1057,12 @@ export class Transformer extends Classic.Node {
         );
     }
 
+    hasInputConnection(label) {
+        return this.editor.connections.some(
+            (c) => c.targetInput === this.socketKey(label)
+        );
+    }
+
     processIO(definitions, multipleConnections, addMethod) {
         for (const def of definitions) {
             const ioConfig = {
@@ -1097,22 +1078,84 @@ export class Transformer extends Classic.Node {
                 ? TransformerOutput
                 : TransformerInput;
             const ioInstance = new ioClass(ioConfig);
-            addMethod(ioInstance);
 
             if (ioConfig.global) {
                 const className = this.constructor.toString().match(/\w+/g)[1];
-                const globalSubject =
-                    this.constructor.globals.get(
-                        `${className}-${ioConfig.label}`
-                    ) || new BehaviorSubject(true);
+                let globalSubject = this.constructor.globals.get(
+                    `${className}-${ioConfig.label}`
+                );
+                if (!globalSubject) {
+                    const ajv = new Ajv();
+                    globalSubject = new BehaviorSubject();
+                    globalSubject
+                        .pipe(
+                            filter((data) => data),
+                            filter((data) =>
+                                ajv.validate(ioInstance.schema, data)
+                            ), // Validate against the schema
+                            timeout(5000), // Set a timeout of 5 seconds
+                            catchError(() => {
+                                // Create your custom LitElement for the form
+                                def.onChange = (e) => {};
+                                def.onSubmit = (e) => {
+                                    console.log("onSubmit", e);
+                                    ioInstance.subject.next(e.formData);
+                                    this.requestSnapshot();
+                                };
+                                const rjsfComponent =
+                                    document.createElement("rjsf-component");
+                                rjsfComponent.setAttribute("is-open", "true");
+                                rjsfComponent.props = def;
 
+                                ioInstance.subject
+                                    .pipe(
+                                        filter((data) =>
+                                            ajv.validate(
+                                                ioInstance.schema,
+                                                data
+                                            )
+                                        ), // Validate against the schema
+                                        take(1)
+                                    )
+                                    .subscribe(() => {
+                                        // Close the SweetAlert2 popup
+                                        Swal.close();
+                                    });
+
+                                // Show a non-cancelable SweetAlert2 popup
+                                const swalOptions = {
+                                    title: "Required Configuration",
+                                    html: rjsfComponent,
+                                    allowOutsideClick: false,
+                                    allowEscapeKey: false,
+                                    showConfirmButton: false,
+                                    showCloseButton: false,
+                                    customClass: {
+                                        popup: "custom-popup-class",
+                                    },
+                                };
+                                Swal.fire(swalOptions);
+
+                                // Return an empty observable to complete the pipeline
+                                return of();
+                            }),
+                            take(1)
+                        )
+                        .subscribe((validData) => {
+                            // Do something with the valid data
+                        });
+                }
                 ioInstance.subject.subscribe(globalSubject);
                 globalSubject.subscribe(ioInstance.subject);
                 this.constructor.globals.set(
                     `${className}-${ioConfig.label}`,
                     globalSubject
                 );
+
+                ioInstance.display = false;
             }
+
+            addMethod(ioInstance);
         }
     }
 

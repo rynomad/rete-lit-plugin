@@ -7,7 +7,7 @@ import { PropagationStopper, CardStyleMixin } from "./mixins.js";
 import { bootstrapCss } from "./bootstrap.css.js";
 import "./react.js";
 
-const RJSFComponent = CardStyleMixin(
+export const RJSFComponent = CardStyleMixin(
     PropagationStopper(
         class RJSFComponentBase extends LitElement {
             static styles = [
@@ -50,7 +50,7 @@ const RJSFComponent = CardStyleMixin(
                     "https://esm.sh/bootstrap@4/dist/css/bootstrap.min.css";
                 reactWrapper.reactComponent = Form;
                 reactWrapper.props = { ...this._props, ...this.props };
-                reactWrapper.props.subject.subscribe((e) => {
+                reactWrapper.props.subject?.subscribe((e) => {
                     console.log("react-wrapper", e);
                     reactWrapper.props = { ...reactWrapper.props, formData: e };
                 });
@@ -60,7 +60,7 @@ const RJSFComponent = CardStyleMixin(
 
             render() {
                 return html`<div style="font-size: 1.3rem; font-weight: bold;">
-                        ${this.props.label}
+                        ${this.props.name || this.props.label}
                     </div>
                     <slot></slot>`; // Exposed slot for the React content
             }

@@ -15,23 +15,65 @@ import {
     switchMap,
     takeUntil,
     tap,
-    of,
     take,
     catchError,
     throwError,
     merge,
-    skip,
-    debounceTime,
+    skipUntil,
+    share,
+    withLatestFrom,
+    distinctUntilChanged,
+    shareReplay,
+    mergeMap,
 } from "https://esm.sh/rxjs@7.3.0";
-import { adaptiveDebounce } from "../util.js";
+import { adaptiveDebounce, hashPOJO } from "../util.js";
 import OpenAI from "https://esm.sh/openai";
 import Swal from "https://esm.sh/sweetalert2";
 import { openDB } from "https://esm.sh/idb@6.0.0";
+import { deepEqual } from "https://esm.sh/fast-equals";
+import { PropagationStopper } from "../mixins.js";
 // Make sure to import your `ExtendedNode` class and `node-meta-component`
 // import { ExtendedNode } from './ExtendedNode';
 // customElements.define('node-meta-component', NodeMetaComponent);
+function addDefaultValuesToSchema(schema) {
+    if (schema.type === "object") {
+        schema.properties = schema.properties || {};
+        schema.required = schema.required || [];
 
-class MagicElement extends LitElement {
+        schema.required.forEach((key) => {
+            if (schema.properties[key].type === "object") {
+                schema.properties[key].default =
+                    schema.properties[key].default || {};
+                addDefaultValuesToSchema(schema.properties[key]);
+            } else if (schema.properties[key].type === "array") {
+                schema.properties[key].default =
+                    schema.properties[key].default || [];
+                addDefaultValuesToSchema(schema.properties[key]);
+            }
+        });
+
+        for (const key of Object.keys(schema.properties)) {
+            if (
+                schema.properties[key].type === "object" &&
+                !schema.properties[key].default
+            ) {
+                addDefaultValuesToSchema(schema.properties[key]);
+            }
+        }
+    } else if (schema.type === "array") {
+        schema.default = schema.default || [];
+
+        if (
+            schema.items &&
+            (schema.items.type === "object" || schema.items.type === "array")
+        ) {
+            addDefaultValuesToSchema(schema.items);
+        }
+    }
+
+    return schema;
+}
+class MagicElement extends PropagationStopper(LitElement) {
     static get properties() {
         return {
             node: { type: Object },
@@ -71,10 +113,39 @@ class MagicElement extends LitElement {
         }
     `;
 
+    showDebug() {
+        const inputs = this.node.upstream.getValue();
+        const outputs = this.node.downstream.getValue();
+        const debug = document.createElement("transformer-debug-card");
+        debug.inputs = inputs;
+        debug.outputs = outputs;
+
+        const swalOptions = {
+            title: "Debug",
+            html: debug, // Your custom DOM element
+            width: "70vw",
+            height: "70vh",
+            textAlign: "left",
+            showCloseButton: true,
+            showCancelButton: false,
+            showConfirmButton: false,
+            allowOutsideClick: true,
+            allowEscapeKey: true,
+            customClass: {
+                popup: "custom-popup-class",
+            },
+        };
+
+        // Show the SweetAlert2 popup
+        this.node.Swal.fire(swalOptions);
+    }
+
     render() {
         return html`
             <node-meta-component
                 .subject=${this.metaSubject}></node-meta-component>
+            <slot></slot>
+            <button @click=${this.showDebug}>show debug</button>
         `;
     }
 }
@@ -89,19 +160,53 @@ class Stream {
         this.node = node;
         this.id = ["meta", "transform"].some((type) => type === definition.type)
             ? `${this.node.id}-${definition.type}`
-            : uuid4();
+            : `${this.node.id}-${definition.name
+                  .toLowerCase()
+                  .replace(/ /g, "-")}`;
         this.socket = node.canvas.socket;
         this.name = definition.name;
         this.description = definition.description;
         this.schema = definition.schema;
         this.type = definition.type;
         this.snapshot = definition.snapshot;
-
+        this.firstCreation = new Subject();
         this.createIndexedDBSubject();
     }
 
+    get read() {
+        return this.subject.pipe(filter((value) => value !== undefined));
+    }
+
     async createIndexedDBSubject() {
+        this.queue = new Subject();
         this.subject = new BehaviorSubject(this.getDefaultValue());
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        this.queue
+            .pipe(
+                withLatestFrom(this.subject),
+                distinctUntilChanged(([_, v1], [__, v2]) => deepEqual(v1, v2)),
+                filter(([queue, value]) => !queue),
+                tap(() => this.queue.next(true)),
+                mergeMap(async ([_queue, value]) => {
+                    await this.saveToDB(value);
+                    return value;
+                }),
+                tap(() => this.queue.next(false)),
+                // tap((value) => console.log("saved to db", value)),
+                takeUntil(this.node.nodeRemoved$)
+            )
+            .subscribe();
+
+        this.subject
+            .pipe(
+                withLatestFrom(this.queue),
+                filter(([_, queue]) => !queue),
+                takeUntil(this.node.nodeRemoved$)
+            )
+            .subscribe((value) => {
+                console.log("value", value);
+                this.queue.next(false);
+            });
 
         if (!["meta", "transform"].includes(this.type)) {
             return;
@@ -111,19 +216,9 @@ class Stream {
         const initialValue = await this.getInitialValue(db);
 
         if (initialValue) {
+            initialValue.fromStore = true;
             this.subject.next(initialValue);
         }
-
-        this.subject
-            .pipe(
-                skip(1),
-                debounceTime(5000),
-                tap((value) => this.saveToDB(value)),
-                takeUntil(this.node.nodeRemoved$)
-            )
-            .subscribe((value) => {
-                console.log("saved to db", this.id, value);
-            });
     }
 
     getDefaultValue() {
@@ -131,8 +226,9 @@ class Stream {
 
         // Otherwise, generate default object based on schema
         if (schema) {
-            const ajv = new Ajv({ useDefaults: true });
-            const validate = ajv.compile(schema);
+            const ajv = new Ajv({ strict: false, useDefaults: true });
+            const augmentedSchema = addDefaultValuesToSchema(schema);
+            const validate = ajv.compile(augmentedSchema);
 
             // Create an object that will be populated with default values
             const defaultData = {};
@@ -150,13 +246,13 @@ class Stream {
         let db;
 
         // Open the database without specifying a version to get the current version
-        db = await openDB(Stream.db);
+        db = await openDB(Stream.db + "-" + this.type);
         let dbVersion = db.version;
 
         if (!db.objectStoreNames.contains(this.id)) {
             db.close();
             dbVersion++;
-            db = await openDB(Stream.db, dbVersion, {
+            db = await openDB(Stream.db + "-" + this.type, dbVersion, {
                 upgrade: (db) => {
                     db.createObjectStore(this.id, {
                         autoIncrement: true,
@@ -171,6 +267,12 @@ class Stream {
         const tx = db.transaction(this.id, "readonly");
         const store = tx.objectStore(this.id);
         const result = await store.get("value");
+
+        if (!result || JSON.stringify(result) === "{}") {
+            this.firstCreation.next(true);
+        }
+
+        this.queue.next(false);
 
         return result ? result : null;
     }
@@ -213,10 +315,66 @@ const MAGIC_PROMPT = `## Instructions for AI Chatbot
 You are an expert JavaScript Developer specializing in Functional Reactive Programming using RxJS.
 
 ### Function Signature
-- Your task is to write a pure JavaScript function snippet. The function should accept an array of input streams (\`inputs\`), a \`stopObservable\`, and an \`errorObservable\`.
-- The function must return an array of output streams.
+- The next system message will describe a node in the system, specifying the input streams and the nodes that provide them.
+- You will receive IDs for these input streams. You MAY these IDs to find the corresponding streams in the \`inputs\` array.
+- Your task is to write a pure JavaScript function snippet according to the following signature:
+\`\`\`
+function (inputs, stopObservable, errorObservable) {
+    // ...
+    return outputs;
+}
+\`\`\`
+
+### Arguments
+- An array of input streams (defined below)
+- A stop observable - an observable that will emit a single value when the system is shutting down and the function should clean up any resources it has allocated.
+- An error observable - an observable that should emit an error if the function encounters an error.
+
+### Return Value
+- An array of output streams (defined below)
+
+### this API
+- The \`this\` object will contain the following properties and methods:
+    - \`this.id\` - the ID of the node that this function is attached to.
+    - \`this.createStream(definition)\` - a function that creates a new stream and returns it. The definition object is defined below.
+    - \`this.createForm(definition)\` - a function that creates a new form and returns two streams, one which emits the form data on submit, and one which emits the form data on change. The definition object is the same as for streams and is defined below.
+    - \`this.cors(url)\` - a function that returns a CORS-enabled version of the URL.
+    - \`this.Swal\` - a reference to the SweetAlert2 library.
+
+### Code Requirements
+- Ensure your code is runnable in a browser environment without requiring transpilation. That means no TypeScript, JSX, or NodeJS-specific APIs unless they can be commonly polyfilled.
+- For imports, use inline \`async import()\` syntax from \`https://esm.sh/\`. Make sure to specify the version.
+- **Important Note on RxJS**: The import paths for RxJS operators have changed. Instead of importing from \`rxjs/operators\`, you should now use \`rxjs\`:
+  - for example, to import map and filter: \`const { map, filter } = await import('https://esm.sh/rxjs')\`.
+- For default exports, explicitly specify the \`default\` keyword.
+- All read/write to streams should be done via the \`subject\` property of the stream object.
+- Your function MUST return an array of output streams, or an empty array if there are no output streams.
+- You MUST use the \`stopObservable\` to terminate your pipeline when it emits a signal.
+- Any runtime errors that occur within your function MUST be sent to the \`errorObservable\`.
+- You MUST ONLY return the function declaration. DO NOT invoke the function or return anything else.
+- You MUST display any alerts or toasts to the user via the \`this.Swal\` object unless directed otherwise.
+- You SHOULD use the \`toast\` parameter of \`this.Swal\` to display toasts instead of alerts, unless directed otherwise.
+  - Proper usage: \`this.Swal.fire({ title: 'Hello World!', toast: true, ... })\`
+  - provide elegant minimalist styling for toasts, and present them in the top right corner of the screen.
+- You MUST wrap all URLs with a CORS proxy using \`this.cors(url)\` unless directed otherwise.
+- You MUST NOT include the \`subject\` property in your stream definitions. This will be automatically generated for you.
+- You MUST create your output streams using \`this.createStream(definition)\`.
+- You MUST NOT use an absolute index to access the input streams. Instead, use \`.find()\` to find the input stream by ID or .filter() to find the input streams by type.
+- You SHOULD provide a \`type\` property in your stream definitions. This will be used to find the input streams by type.
+- You MUST use this.createForm(definition) to create forms when directed to do so.
+- You MUST include both streams returned by this.createForm(definition) in your output streams.
+- You MUST use this.cors(url) to wrap all URLs unless directed otherwise.
+- You SHOULD subscribe to upstream onSubmit inputs when dealing with form data, but you MAY do otherwise if it better fulfills the requirements.
+- You MUST not import any libraries that are not supported in the browser environment.
+- You MUST use DOMParser for any html parsing.
+- You MUST NOT use the 'format' key in any JSON schema.
+- You MUST include all outputs in the return value, you MUST NOT add any additional outputs to the output array asynchonously.
+- You MUST NOT use any meta inputs in your function unless directed otherwise. These are inputs that are meant for the system to use, not for your function to use.
+- You MUST set the response type of all HTTP requests to the appropriate type explicitly.
+- You MUST specify the version of all imports in the URL.
 
 ### Stream Schema
+- This is the JSON schema for a stream:
 \`\`\`
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
@@ -253,71 +411,116 @@ You are an expert JavaScript Developer specializing in Functional Reactive Progr
 }
 \`\`\`
 
-### Input Streams
-- The next system message will describe a node in the system, specifying the input streams and the nodes that provide them.
-- You will receive IDs for these input streams. Use these IDs to find the corresponding streams in the \`inputs\` array.
-
-### Output Streams
-- Utilize \`this.createStream(definition)\` to create new output streams.
-- Construct all output stream definitions inline.
-- Your function must include a \`return\` statement that returns an array of output streams.
-
 ### Stream Definition Schema
-The schema for stream definitions is as follows:
-
+- This is the JSON schema for a stream definition:
 \`\`\`json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
     "name": {
-      "type": "string",
-      "description": "The name of the stream."
+        "type": "string",
+        "description": "The name of the stream."
     },
     "description": {
       "type": "string",
       "description": "A description of the stream."
     },
     "type": {
-    "type": "string",
-    "description": "Optional. The type of stream. 'meta' and 'transform' streams are reserved for system use. All other types are available for your use."
+        "type": "string",
+        "description": "Optional. The type of stream. 'meta' and 'transform' streams are reserved for system use. All other types are available for your use."
     },
     "schema": {
-      "type": "object",
-      "description": "The JSON schema that describes the data to be emitted by the subject."
+        "type": "object",
+        "description": "The JSON schema that describes the data to be emitted by the subject."
     },
+    "uiSchema": {
+        "type": "object"
+        "description": "a ui Schema to help render any forms via react-json-schema-form"
+    }
   },
-  "required": ["id", "name", "description", "schema", "subject"]
+  "required": ["name", "description", "schema"]
 }
 \`\`\`
 
-- Do not include the \`id\` or \`subject\` properties in your stream definition. These will be automatically generated for you.
-
-### Code Requirements
-- For imports, use inline \`async import()\` syntax from \`https://esm.sh/\`. Make sure to specify the version.
-- **Important Note on RxJS**: The import paths for RxJS operators have changed. Instead of importing from \`rxjs/operators\`, you should now use: \`const { map, filter, combineLatest } = await import('https://esm.sh/rxjs')\`.
-- For default exports, explicitly specify the \`default\` keyword.
-- All read/write to streams should be done via the \`subject\` property of the stream object.
-
-### Mandatory Requirements
-- You MUST use the \`stopObservable\` to terminate your pipeline when it emits a signal.
-- Any runtime errors that occur within your function MUST be sent to the \`errorObservable\`.
-- You MUST ONLY return the function declaration. DO NOT invoke the function or return anything else.
-- Ensure your code is runnable in a browser environment without requiring transpilation. That means no TypeScript, JSX, or NodeJS-specific APIs unless they can be commonly polyfilled.
-
-
-### Utilities
-- \`this.Swal\` is the sweetalert2 library available for displaying alerts and toasts. Default to showing toasts unless specified otherwise.
-- Use \`this.cors(url)\` to wrap URLs with a CORS proxy when making HTTP requests, unless directed otherwise.
-
-Your output should be presented in a single Markdown code block containing only the function definition.
+Your output MUST be presented in a single Markdown code block containing only the function definition.
+You MAY present a short explanation of your solution before the code block.
 `;
+
+const MAGIC_QUESTIONS = [
+    {
+        question: "Is the code a single async function?",
+        options: ["yes", "no"],
+    },
+    {
+        question: [
+            "Does the code match the description, doing what the description says it should do?",
+        ],
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Does the code properly reference the inputs, using correct keys or types as appropriate?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Does the code properly return an output array of streams, or an empty array?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Does the code properly use the stopObservable to clean up any internal pipelines?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Does the code properly use the errorObservable to report any internal errors?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Does the code adhere to all Code Requirements, regarding api usage?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Does the code use browser native fetch instead of node-fetch?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Are all form definitions valid for use with react-json-schema-form, with correct uiSchema if applicable?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Is the code free from any TypeScript or JSX syntax, as well as free from any attempts to import type files?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Does the code explicitly set the response type of all HTTP requests to the appropriate type?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Does the code only call `this.createStream()` in the top scope of the function?",
+        options: ["yes", "no"],
+    },
+    {
+        question:
+            "Does the code specify the version of all imports in the URL?",
+        options: ["yes", "no"],
+    },
+];
 
 export class MagicTransformer extends Transformer {
     static Component = MagicElement;
     static inputs = [
         {
             label: "api_key",
+            name: "OpenAI API Key",
             global: true,
             schema: {
                 $schema: "http://json-schema.org/draft-07/schema#",
@@ -325,6 +528,11 @@ export class MagicTransformer extends Transformer {
                 properties: {
                     api_key: {
                         type: "string",
+                        title: "Key",
+                        minLength: 51,
+                        maxLength: 51,
+                        description:
+                            "https://platform.openai.com/account/api-keys",
                     },
                 },
                 required: ["api_key"],
@@ -396,14 +604,130 @@ export class MagicTransformer extends Transformer {
     constructor(ide, canvasId, data = MagicTransformer, id) {
         super(ide, canvasId, data, id);
         this.corsProxyUrl = "http://localhost:8080/";
-        this.setup();
         this.cors = this.cors.bind(this);
+        this.createStream = this.createStream.bind(this);
         this.nodeRemoved$ = new Subject();
+        this.setup();
+    }
+
+    questionMap(config = {}) {
+        config.model ||= "gpt-4";
+        config.temperature ||= 0.4;
+        config.n = 1;
+        const mergeStrategy = config.mergeStrategy || "first";
+        delete config.mergeStrategy;
+        const questions = config.questions;
+        delete config.questions;
+        const questionMessage = [
+            {
+                role: "system",
+                content: [
+                    "Please answer the following questions to the best of your ability",
+                    `You are a careful reviewer, known for catching subtle errors`,
+                    `The context containing the code and other guidelines will be provided after the questions`,
+                ]
+                    .concat([
+                        questions.map(({ question, options }, i) => [
+                            `[${i++}] ${question}`,
+                            options.map(
+                                (option, index) => `${index + 1}) ${option}`
+                            ),
+                        ]),
+                    ])
+                    .flat()
+                    .join("\n"),
+            },
+        ];
+        return switchMap((messages) => {
+            return this.openaiApi.pipe(
+                filter((openai) => !!openai),
+                take(1),
+                switchMap((openai) => {
+                    try {
+                        return openai.chat.completions
+                            .create({
+                                ...config,
+                                messages: questionMessage
+                                    .concat(
+                                        messages.map((message) =>
+                                            !Array.isArray(message) ||
+                                            mergeStrategy === "all"
+                                                ? message
+                                                : message[0]
+                                        )
+                                    )
+                                    .flat(),
+                                functions: [
+                                    {
+                                        name: "answer_questions",
+                                        description:
+                                            "provide answers to all questions asked",
+                                        parameters: {
+                                            type: "object",
+                                            properties: {
+                                                answers: {
+                                                    type: "array",
+                                                    items: {
+                                                        type: "object",
+                                                        properties: {
+                                                            question: {
+                                                                type: "number",
+                                                                description:
+                                                                    "the number of the question",
+                                                            },
+                                                            explanation: {
+                                                                type: "string",
+                                                                description:
+                                                                    "a short explanation of the answer",
+                                                            },
+                                                            answer: {
+                                                                type: "number",
+                                                                description:
+                                                                    "the number of the answer",
+                                                            },
+                                                        },
+                                                        required: [
+                                                            "question",
+                                                            "answer",
+                                                            "explanation",
+                                                        ],
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                ],
+                                function_call: {
+                                    name: "answer_questions",
+                                },
+                            })
+                            .then((res) =>
+                                JSON.parse(
+                                    res.choices[0].message.function_call
+                                        .arguments
+                                )
+                            );
+                    } catch (error) {
+                        // Handle synchronous errors if any
+                        return throwError(error);
+                    }
+                }),
+                catchError((error) => {
+                    // Handle API errors here
+                    console.error("API call failed:", error);
+
+                    // Replace with a new observable if you want to continue the pipeline,
+                    // or re-throw the error to terminate it.
+                    return throwError(error);
+                    // return of(null); // to replace with a new observable that emits `null`
+                })
+            );
+        });
     }
 
     chatMap(config = {}) {
         config.model ||= "gpt-4";
-        config.temperature ||= 0.3;
+        config.temperature ||= 0.4;
         const mergeStrategy = config.mergeStrategy || "first";
         delete config.mergeStrategy;
         return switchMap((messages) => {
@@ -453,11 +777,21 @@ export class MagicTransformer extends Transformer {
         return `${this.corsProxyUrl}${url}`;
     }
 
+    debug(message) {
+        return tap((value) => {
+            console.log(
+                this.id,
+                this.meta.subject.getValue().name,
+                message,
+                value
+            );
+        });
+    }
+
     async setup() {
         await this.ready;
-        const transformFunctions$ = new BehaviorSubject(() => {
-            return [];
-        });
+        await this.canvas.ready$;
+        const transformFunctions$ = new Subject();
         this.transformCode$ = this.createStream({
             name: "transformCode",
             type: "transform",
@@ -467,7 +801,6 @@ export class MagicTransformer extends Transformer {
                 properties: {
                     code: {
                         type: "string",
-                        default: "function (){return []}",
                     },
                 },
             },
@@ -504,18 +837,6 @@ export class MagicTransformer extends Transformer {
             takeUntil(this.nodeRemoved$)
         );
 
-        connectionEvents$.subscribe((e) => {
-            console.log("connectionEvents$", this.id, e);
-        });
-
-        this.upstream.subscribe((e) => {
-            console.log("upstream", this.id, e);
-        });
-
-        this.downstream.subscribe((e) => {
-            console.log("downstream", this.id, e);
-        });
-
         connectionEvents$
             .pipe(
                 switchMap((connectedNodes) => {
@@ -532,14 +853,43 @@ export class MagicTransformer extends Transformer {
                         })
                     );
                 }),
+                distinctUntilChanged((a, b) =>
+                    deepEqual(
+                        a.map((s) => s.id).sort(),
+                        b.map((s) => s.id).sort()
+                    )
+                ),
                 takeUntil(this.nodeRemoved$)
             )
             .subscribe(this.upstream);
 
-        this.transformErrors$ = new BehaviorSubject(null);
+        this.transformErrors$ = new Subject();
 
-        combineLatest([this.upstream, transformFunctions$])
+        this.readyUpstream = this.upstream.pipe(
+            skipUntil(this.canvas.store.updates.read),
+            this.debug("readyUpstream upstream changed"),
+            filter((streams) => {
+                if (!this.hasConnection("inputs")) {
+                    return true;
+                }
+                if (
+                    streams.length >
+                    streams.filter((stream) => stream.type === "meta").length
+                ) {
+                    return true;
+                }
+            }),
+            this.debug("readyUpStream upstream changed and is ready"),
+            shareReplay()
+        );
+
+        const violentError$ = new Subject();
+
+        const needsRedoCode$ = merge(violentError$, this.transformErrors$);
+
+        combineLatest([this.readyUpstream, transformFunctions$])
             .pipe(
+                this.debug("readyUpstream and transformFunctions$ changed"),
                 switchMap(async ([streams, transform]) => {
                     // Create a new stop signal for this run
                     const currentTransformStop$ = new Subject();
@@ -548,10 +898,18 @@ export class MagicTransformer extends Transformer {
                     let error;
 
                     try {
+                        const stopObservable = merge(
+                            this.nodeRemoved$,
+                            currentTransformStop$
+                        );
+                        stopObservable.subject = stopObservable;
+                        const errorObservable = this.transformErrors$;
+                        errorObservable.subject = errorObservable;
+
                         transformedStreams = await transform(
                             streams,
-                            merge(this.nodeRemoved$, currentTransformStop$),
-                            this.transformErrors
+                            stopObservable,
+                            errorObservable
                         );
                         if (!Array.isArray(transformedStreams)) {
                             throw new Error(
@@ -561,6 +919,9 @@ export class MagicTransformer extends Transformer {
                     } catch (e) {
                         isError = true;
                         error = e;
+                        console.error("An error occurred:", error);
+                        console.log(streams, transform);
+                        violentError$.next(true);
                     }
 
                     return {
@@ -584,7 +945,6 @@ export class MagicTransformer extends Transformer {
                     ) => {
                         if (isError) {
                             transformedStreams = acc.prevTransformed;
-                            console.error("An error occurred:", error);
                         } else {
                             // If a previous transform stop signal exists, trigger it
                             if (acc.lastTransformStop$) {
@@ -597,7 +957,9 @@ export class MagicTransformer extends Transformer {
                         }
 
                         acc.prevTransformed = transformedStreams;
-
+                        if (!transformedStreams) {
+                            violentError$.next(true);
+                        }
                         return {
                             prevTransformed: acc.prevTransformed,
                             transformed: transformedStreams,
@@ -612,10 +974,8 @@ export class MagicTransformer extends Transformer {
                         lastTransformStop$: null,
                     }
                 ),
-                tap(({ transformed, originalStreams }) => {
-                    console.log("transformed", this.id, transformed);
-                    console.log("originalStreams", this.id, originalStreams);
-                }),
+                this.debug("transformedStreams changed"),
+                filter(({ transformed }) => transformed !== null),
                 map(({ transformed, originalStreams }) => {
                     const chainables = originalStreams.filter(
                         (stream) =>
@@ -630,36 +990,109 @@ export class MagicTransformer extends Transformer {
         this.getInput("api_key")
             .subject.pipe(
                 filter((e) => e?.api_key),
-                map(
-                    ({ api_key }) =>
-                        new OpenAI({
-                            apiKey: api_key,
-                            dangerouslyAllowBrowser: true,
-                        })
-                )
+                map(({ api_key }) => {
+                    console.log("got api key");
+                    return new OpenAI({
+                        apiKey: api_key,
+                        dangerouslyAllowBrowser: true,
+                    });
+                })
             )
             .subscribe(this.openaiApi);
 
-        this.initialCode$ = this.transformCode$.subject.pipe(filter((e) => e));
-        this.errorCorrectedCode$ = new Subject();
+        this.initialCode$ = this.transformCode$.subject.pipe(
+            filter((e) => e.code),
+            this.debug("transformCode$ changed"),
+            takeUntil(this.nodeRemoved$),
+            share()
+        );
 
-        combineLatest(
-            this.upstream.pipe(
-                filter(
-                    (streams) =>
-                        streams.length === 1 ||
-                        streams.length >
-                            streams.filter((stream) => stream.type === "meta")
-                                .length
-                )
+        const needRevisedCode$ = this.meta.subject.pipe(
+            filter((e) => e && e.name !== "New Magic Node"),
+            this.debug("needRevisedCode$ meta changed"),
+            withLatestFrom(this.readyUpstream, this.initialCode$),
+            this.debug(
+                "meta changed and readyUpstream and initialCode$ changed"
+            ),
+            filter(
+                ([meta, upstream, transform]) =>
+                    !(meta.fromStore && transform.fromStore)
+            ),
+            this.debug("needRevisedCode$ check"),
+            map(([{ name, description }, upstream, transform]) => {
+                const code = transform.code;
+                const upstreamStreams = upstream.filter(
+                    (stream) => stream.id !== this.meta.id
+                );
+                const upstreamMeta = upstreamStreams.filter(
+                    (stream) => stream.meta
+                );
+                const upstreamAvailable = upstreamStreams.filter(
+                    (stream) => !stream.meta
+                );
+
+                const content = [
+                    `# Node under review`,
+                    this.meta.toPromptString(),
+                    `# Upstream nodes`,
+                    upstreamMeta.map((stream) => stream.toPromptString()),
+                    `# Available streams`,
+                    upstreamAvailable.map((stream) => stream.toPromptString()),
+                    `# Code under review`,
+                    `\`\`\`js\n${code}\n\`\`\``,
+                ]
+                    .flat()
+                    .join("\n");
+
+                const messages = [
+                    {
+                        role: "system",
+                        content,
+                    },
+                ];
+
+                return messages;
+            }),
+            this.questionMap({
+                questions: MAGIC_QUESTIONS,
+            }),
+            this.debug("needRevisedCode$ questionMap"),
+            filter((e) => e.answers.filter((a) => a.answer === 2).length),
+            this.debug("needRevisedCode$ true"),
+            takeUntil(this.nodeRemoved$),
+            share()
+        );
+
+        const needFirstCode$ = combineLatest(
+            this.readyUpstream.pipe(
+                this.debug("needFirstCode$ readyUpstream changed")
             ),
             this.meta.subject.pipe(
+                this.debug("needFirstCode$ meta changed"),
                 filter((e) => e && e.name !== "New Magic Node")
+            ),
+            this.transformCode$.firstCreation.pipe(
+                this.debug("needFirstCode$ firstCreation changed")
             )
-        )
+        ).pipe(tap((e) => console.log("needFirstCode$", this.id, e)));
+
+        const needCode$ = merge(
+            needFirstCode$,
+            needRevisedCode$,
+            needsRedoCode$
+        );
+
+        needCode$
             .pipe(
-                adaptiveDebounce(5000, 30000, 1000),
-                map(([upstream, _meta]) => {
+                this.debug("needCode$ changed"),
+                withLatestFrom(
+                    this.readyUpstream,
+                    this.meta.subject.pipe(
+                        filter((e) => e && e.name !== "New Magic Node")
+                    )
+                ),
+                this.debug("needCode$ with latest from upstream and meta"),
+                map(([needCode, upstream, _meta]) => {
                     const upstreamStreams = upstream.filter(
                         (stream) => stream.id !== this.meta.id
                     );
@@ -679,6 +1112,9 @@ export class MagicTransformer extends Transformer {
                         upstreamAvailable.map((stream) =>
                             stream.toPromptString()
                         ),
+                        `# Grading questions`,
+                        `Your code must pass the following tests:`,
+                        MAGIC_QUESTIONS.map((q) => q.question),
                     ]
                         .flat()
                         .join("\n");
@@ -696,24 +1132,62 @@ export class MagicTransformer extends Transformer {
                 map((response) => response.choices[0].message.content),
                 filter((e) => e),
                 map(this.parseSingleCodeBlock),
+                filter((e) => e),
                 takeUntil(this.nodeRemoved$)
             )
             .subscribe(this.initialCode$);
 
         this.initialCode$
             .pipe(
-                map(this.createAsyncFunctionFromString.bind(this)),
+                filter((e) => e.code),
+                mergeMap(this.createAsyncFunctionFromString.bind(this)),
+                this.debug("initialCode$ made into function"),
+                tap((e) => {
+                    if (!e) {
+                        violentError$.next(true);
+                    }
+                }),
                 filter((e) => e),
-                tap((e) => console.log("gpt", e)),
-                takeUntil(this.nodeRemoved$)
+                this.debug(
+                    "initialCode$ transformed into function successfully"
+                ),
+                takeUntil(this.nodeRemoved$),
+                share()
             )
             .subscribe(transformFunctions$);
 
-        this.downstream.pipe(skip(2)).subscribe(() => this.requestSnapshot());
+        // this.downstream.pipe(skip(2)).subscribe(() => this.requestSnapshot());
     }
 
     createStream(definition) {
         return new Stream(this, definition);
+    }
+
+    createForm(definition) {
+        definition = JSON.parse(JSON.stringify(definition));
+        const onChange = this.createStream({
+            ...definition,
+            name: definition.name + " onChange",
+        });
+        const onSubmit = this.createStream({
+            ...definition,
+            name: definition.name + " onSubmit",
+        });
+        definition.onChange = (e) => {
+            console.log("onChange", e);
+            onChange.subject.next(e.formData);
+        };
+        definition.onSubmit = (e) => {
+            console.log("onSubmit", e);
+            onSubmit.subject.next(e.formData);
+        };
+        const rjsfComponent = document.createElement("rjsf-component");
+        rjsfComponent.setAttribute("is-open", "true");
+        rjsfComponent.props = definition;
+
+        this.component.replaceChildren(rjsfComponent);
+
+        return [onChange, onSubmit];
     }
 
     parseSingleCodeBlock(markdown) {
@@ -730,15 +1204,39 @@ export class MagicTransformer extends Transformer {
         return null;
     }
 
-    createAsyncFunctionFromString({ code }) {
+    async createAsyncFunctionFromString({ code }) {
         code = code.trim();
+
+        // Prepend 'export default' to make it an ES6 module
+        const moduleCode = `export default ${code}`
+            .split("\n")
+            .map((line, i) => {
+                // if (!i) {
+                //     return line + "\ndebugger;";
+                // }
+                return line;
+            })
+            .join("\n");
+
+        // Create a blob object and construct its URL
+        const blob = new Blob([moduleCode], { type: "application/javascript" });
+        const objectURL = URL.createObjectURL(blob);
+
         try {
-            return new Function(
-                "context",
-                "return (" + code + ").bind(context)"
-            )(this);
+            // Dynamically import the module
+            const importedModule = await import(objectURL);
+
+            // Revoke the object URL to free up memory
+            URL.revokeObjectURL(objectURL);
+
+            // Bind 'this' to the imported function and return it
+            return importedModule.default.bind(this);
         } catch (e) {
-            console.error(e, code);
+            console.error("Error importing function:", e);
+
+            // Revoke the object URL to free up memory even in case of an error
+            URL.revokeObjectURL(objectURL);
+
             return null;
         }
     }
