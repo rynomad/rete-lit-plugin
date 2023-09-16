@@ -4,6 +4,10 @@ import {
     mergeMap,
     filter,
     tap,
+    Subject,
+    merge,
+    withLatestFrom,
+    map,
 } from "https://esm.sh/rxjs@7.3.0";
 import { openDB } from "https://esm.sh/idb@6.0.0";
 import { deepEqual } from "https://esm.sh/fast-equals";
@@ -76,25 +80,51 @@ export class CanvasStore {
         });
     }
 
-    initEditorPipe() {
-        this.editor?.addPipe(async (context) => {
-            if (
-                [
-                    "nodecreated",
-                    "noderemoved",
-                    "connectioncreated",
-                    "connectionremoved",
-                ].includes(context.type)
-            ) {
-                if (!this.lock.getValue()) {
-                    await this.createSnapshot();
-                }
-                this.historyOffset.next(0);
+    async initEditorPipe() {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        this.snapshotRequests = new Subject();
+        const queue = new BehaviorSubject(false);
+        const editorEvents$ = merge(
+            this.canvas.editorStream.pipe(
+                filter(
+                    (context) =>
+                        context &&
+                        [
+                            "nodecreated",
+                            "noderemoved",
+                            "connectioncreated",
+                            "connectionremoved",
+                        ].includes(context.type)
+                )
+            ),
+            this.snapshotRequests
+        );
 
-                // await this.deleteSnapshotsAfterOffset();
-            }
-            return context;
-        });
+        queue
+            .pipe(
+                withLatestFrom(editorEvents$),
+                filter(([queue, value]) => !queue),
+                map(([queue, value]) => value),
+                filter((value) => value !== undefined),
+                distinctUntilChanged((v1, v2) => deepEqual(v1, v2)),
+                tap(() => queue.next(true)),
+                mergeMap(async (value) => {
+                    await this.createSnapshot();
+                    return value;
+                }),
+                tap(() => queue.next(false))
+            )
+            .subscribe();
+
+        editorEvents$
+            .pipe(
+                withLatestFrom(queue),
+                filter(([_, queue]) => !queue)
+            )
+            .subscribe((value) => {
+                console.log("value", value);
+                queue.next(false);
+            });
     }
 
     async createSnapshot() {
@@ -273,7 +303,6 @@ export class CanvasStore {
         );
 
         await new Promise(requestIdleCallback);
-        this.updates.next(true);
 
         await Promise.all(
             snapshot.connections.map(async (connection) => {
@@ -287,6 +316,7 @@ export class CanvasStore {
             })
         );
 
+        this.updates.next(true);
         return snapshot;
     }
 }

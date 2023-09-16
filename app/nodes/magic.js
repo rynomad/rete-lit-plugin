@@ -19,19 +19,24 @@ import {
     catchError,
     throwError,
     merge,
-    skipUntil,
+    concat,
     share,
     withLatestFrom,
     distinctUntilChanged,
     shareReplay,
     mergeMap,
+    ReplaySubject,
+    from,
 } from "https://esm.sh/rxjs@7.3.0";
+import * as rxjs from "https://esm.sh/rxjs@7.3.0";
 import { adaptiveDebounce, hashPOJO } from "../util.js";
 import OpenAI from "https://esm.sh/openai";
 import Swal from "https://esm.sh/sweetalert2";
 import { openDB } from "https://esm.sh/idb@6.0.0";
 import { deepEqual } from "https://esm.sh/fast-equals";
 import { PropagationStopper } from "../mixins.js";
+import { Readability } from "https://esm.sh/@mozilla/readability";
+import { getUID } from "../util.js";
 // Make sure to import your `ExtendedNode` class and `node-meta-component`
 // import { ExtendedNode } from './ExtendedNode';
 // customElements.define('node-meta-component', NodeMetaComponent);
@@ -73,6 +78,115 @@ function addDefaultValuesToSchema(schema) {
 
     return schema;
 }
+
+function chatTransform(inputs, stopObservable, errorObservable) {
+    let gptMessages$;
+
+    // Find the stream object of type 'gpt-messages' in the inputs array
+    for (const input of inputs) {
+        if (input.type === "gpt-messages") {
+            gptMessages$ = input.subject.pipe(filter((e) => e && e.length > 0));
+            break;
+        }
+    }
+
+    // If not found, use from([])
+    if (!gptMessages$) {
+        gptMessages$ = from([[]]);
+    }
+
+    const formSubject = this.createChatInput();
+
+    // Create output with the 'chat messages' schema
+    const chatMessagesSchema = {
+        name: "chat messages",
+        description: "gpt chat log",
+        type: "gpt-messages",
+        schema: {
+            type: "array",
+            items: {
+                oneOf: [
+                    {
+                        type: "object",
+                        properties: {
+                            role: {
+                                type: "string",
+                                enum: ["system", "user", "assistant"],
+                            },
+                            content: {
+                                type: "string",
+                            },
+                        },
+                        required: ["role", "content"],
+                    },
+                    {
+                        type: "array",
+                        items: {
+                            type: "object",
+                            properties: {
+                                role: {
+                                    type: "string",
+                                    enum: ["system", "user", "assistant"],
+                                },
+                                content: {
+                                    type: "string",
+                                },
+                            },
+                            required: ["role", "content"],
+                        },
+                    },
+                ],
+            },
+        },
+        uiSchema: {},
+    };
+
+    const output = this.createStream(chatMessagesSchema);
+
+    // Combine the latest form subject values with the gpt-messages
+    combineLatest([formSubject, gptMessages$])
+        .pipe(
+            filter(([value]) => value.message),
+            map(([formValue, gptMessages]) => {
+                return [
+                    ...gptMessages,
+                    {
+                        role: "user",
+                        content: formValue.message,
+                    },
+                ];
+            }),
+            tap(async (value) => {
+                if (!this.hasConnection("outputs")) {
+                    const nextNode = new MagicTransformer(
+                        this.ide,
+                        this.canvasId
+                    );
+                    const connection = {
+                        id: getUID(),
+                        source: this.id,
+                        target: nextNode.id,
+                        sourceOutput: this.getOutput("outputs").key,
+                        targetInput: nextNode.getInput("inputs").key,
+                    };
+                    await this.editor.addNode(nextNode);
+                    const view = this.canvas.area.nodeViews.get(nextNode.id);
+                    const selfView = this.canvas.area.nodeViews.get(this.id);
+                    const translate = {
+                        y: selfView.position.y + 100 + this.height,
+                        x: selfView.position.x,
+                    };
+                    view.translate(translate.x, translate.y);
+                    await this.editor.addConnection(connection);
+                }
+            }),
+            this.chatMap({ stream: true }),
+            takeUntil(stopObservable)
+        )
+        .subscribe(output.subject);
+    return [output];
+}
+
 class MagicElement extends PropagationStopper(LitElement) {
     static get properties() {
         return {
@@ -145,6 +259,7 @@ class MagicElement extends PropagationStopper(LitElement) {
             <node-meta-component
                 .subject=${this.metaSubject}></node-meta-component>
             <slot></slot>
+            <stream-renderer .stream=${this.node.chatStreams}></stream-renderer>
             <button @click=${this.showDebug}>show debug</button>
         `;
     }
@@ -306,10 +421,6 @@ class Stream {
     }
 }
 
-function getUID() {
-    return Math.random().toString(36).substring(2);
-}
-
 const MAGIC_PROMPT = `## Instructions for AI Chatbot
 
 You are an expert JavaScript Developer specializing in Functional Reactive Programming using RxJS.
@@ -340,6 +451,9 @@ function (inputs, stopObservable, errorObservable) {
     - \`this.createForm(definition)\` - a function that creates a new form and returns two streams, one which emits the form data on submit, and one which emits the form data on change. The definition object is the same as for streams and is defined below.
     - \`this.cors(url)\` - a function that returns a CORS-enabled version of the URL.
     - \`this.Swal\` - a reference to the SweetAlert2 library.
+    - \`this.Readability\` - a reference to the Readability library from mozilla.
+    - \`this.rxjs\` - a reference to the RxJS library.
+    - \`this.rxjsOperators\` - a reference to the RxJS operators.
 
 ### Code Requirements
 - Ensure your code is runnable in a browser environment without requiring transpilation. That means no TypeScript, JSX, or NodeJS-specific APIs unless they can be commonly polyfilled.
@@ -366,7 +480,7 @@ function (inputs, stopObservable, errorObservable) {
 - You MUST use this.cors(url) to wrap all URLs unless directed otherwise.
 - You SHOULD subscribe to upstream onSubmit inputs when dealing with form data, but you MAY do otherwise if it better fulfills the requirements.
 - You MUST not import any libraries that are not supported in the browser environment.
-- You MUST use DOMParser for any html parsing.
+- You SHOULD use this.Readability for any HTML parsing needs, but you MAY use another library if it better fulfills the requirements.
 - You MUST NOT use the 'format' key in any JSON schema.
 - You MUST include all outputs in the return value, you MUST NOT add any additional outputs to the output array asynchonously.
 - You MUST NOT use any meta inputs in your function unless directed otherwise. These are inputs that are meant for the system to use, not for your function to use.
@@ -595,11 +709,19 @@ export class MagicTransformer extends Transformer {
         },
     ];
 
+    chatStreams = new Subject();
+
     upstream = new BehaviorSubject([this.meta]); // Initialized with meta
     downstream = new BehaviorSubject([]);
+    transformFunctions$ = new BehaviorSubject(chatTransform.bind(this));
+    transformErrors$ = new Subject();
     gpt = new BehaviorSubject(null);
     openaiApi = new BehaviorSubject(null);
+
     Swal = Swal;
+    Readability = Readability;
+    rxjs = rxjs;
+    rxjsOperators = rxjs;
 
     constructor(ide, canvasId, data = MagicTransformer, id) {
         super(ide, canvasId, data, id);
@@ -725,36 +847,71 @@ export class MagicTransformer extends Transformer {
         });
     }
 
+    async chatCall(config, openai) {
+        const remainder = config.quantity - 1;
+        const mergeStrategy = config.mergeStrategy || "first";
+
+        const stream = await openai.chat.completions.create({
+            ...config,
+            stream: true,
+            messages: config.messages
+                .map((message) =>
+                    !Array.isArray(message) || mergeStrategy === "all"
+                        ? message
+                        : message[0]
+                )
+                .flat(),
+        });
+
+        let outputStream = new BehaviorSubject("");
+        let content = "";
+        this.chatStreams.next(outputStream);
+
+        let allResponses = await Promise.all([
+            (async () => {
+                for await (const part of stream) {
+                    const delta = part.choices[0]?.delta?.content || "";
+                    content += delta;
+                    console.log(content);
+                    outputStream.next(content);
+                }
+                return content;
+            })(),
+            (async () => {
+                if (remainder > 0) {
+                    const e = await openai.chat.completions.create({
+                        model: config.model,
+                        messages,
+                        temperature: config.temperature,
+                        n: remainder,
+                    });
+                    const choices = e.choices.map((e) => e.message.content);
+                    return choices;
+                }
+                return [];
+            })(),
+        ]);
+        allResponses = allResponses.flat().map((content) => ({
+            role: "assistant",
+            content,
+        }));
+
+        return [
+            ...config.messages,
+            allResponses.length > 1 ? allResponses : allResponses[0],
+        ];
+    }
+
     chatMap(config = {}) {
         config.model ||= "gpt-4";
         config.temperature ||= 0.4;
-        const mergeStrategy = config.mergeStrategy || "first";
-        delete config.mergeStrategy;
         return switchMap((messages) => {
             return this.openaiApi.pipe(
                 filter((openai) => !!openai),
                 take(1),
                 switchMap((openai) => {
                     try {
-                        return openai.chat.completions
-                            .create({
-                                ...config,
-                                messages: messages
-                                    .map((message) =>
-                                        !Array.isArray(message) ||
-                                        mergeStrategy === "all"
-                                            ? message
-                                            : message[0]
-                                    )
-                                    .flat(),
-                                mergeStrategy: undefined,
-                            })
-                            .then((res) => ({
-                                ...res,
-                                history: messages.concat([
-                                    res.choices.map((choice) => choice.message),
-                                ]),
-                            }));
+                        return this.chatCall({ ...config, messages }, openai);
                     } catch (error) {
                         // Handle synchronous errors if any
                         return throwError(error);
@@ -790,8 +947,6 @@ export class MagicTransformer extends Transformer {
 
     async setup() {
         await this.ready;
-        await this.canvas.ready$;
-        const transformFunctions$ = new Subject();
         this.transformCode$ = this.createStream({
             name: "transformCode",
             type: "transform",
@@ -805,6 +960,7 @@ export class MagicTransformer extends Transformer {
                 },
             },
         });
+
         // Initialize nodeRemoved$ based on editorStream
         this.canvas.editorStream
             .pipe(
@@ -814,178 +970,11 @@ export class MagicTransformer extends Transformer {
             )
             .subscribe(this.nodeRemoved$);
 
-        // Setup upstream connections
-        const connectionEvents$ = this.canvas.editorStream.pipe(
-            filter((event) => event),
-            filter((event) =>
-                ["connectioncreated", "connectionremoved"].includes(event.type)
-            ),
-            map((event) => ({
-                type: event.type,
-                sourceNode: this.canvas.editor.getNode(event.data.source),
-                targetNode: this.canvas.editor.getNode(event.data.target),
-            })),
-            filter(({ targetNode }) => targetNode.id === this.id),
-            scan((connectedNodes, { type, sourceNode }) => {
-                return type === "connectioncreated"
-                    ? [...connectedNodes, sourceNode]
-                    : connectedNodes.filter(
-                          (node) => node.id !== sourceNode.id
-                      );
-            }, []),
-            startWith([]),
-            takeUntil(this.nodeRemoved$)
-        );
+        this.watchUpstreams();
 
-        connectionEvents$
-            .pipe(
-                switchMap((connectedNodes) => {
-                    const downstreams = connectedNodes.map(
-                        (node) => node.downstream
-                    );
-                    return combineLatest(downstreams).pipe(
-                        map((arrays) => {
-                            const uniqueArray = [
-                                ...new Set([].concat(...arrays)),
-                            ];
-                            // Always include meta object in the upstream
-                            return [this.meta, ...uniqueArray];
-                        })
-                    );
-                }),
-                distinctUntilChanged((a, b) =>
-                    deepEqual(
-                        a.map((s) => s.id).sort(),
-                        b.map((s) => s.id).sort()
-                    )
-                ),
-                takeUntil(this.nodeRemoved$)
-            )
-            .subscribe(this.upstream);
+        const needsRedoCode$ = this.transformErrors$;
 
-        this.transformErrors$ = new Subject();
-
-        this.readyUpstream = this.upstream.pipe(
-            skipUntil(this.canvas.store.updates.read),
-            this.debug("readyUpstream upstream changed"),
-            filter((streams) => {
-                if (!this.hasConnection("inputs")) {
-                    return true;
-                }
-                if (
-                    streams.length >
-                    streams.filter((stream) => stream.type === "meta").length
-                ) {
-                    return true;
-                }
-            }),
-            this.debug("readyUpStream upstream changed and is ready"),
-            shareReplay()
-        );
-
-        const violentError$ = new Subject();
-
-        const needsRedoCode$ = merge(violentError$, this.transformErrors$);
-
-        combineLatest([this.readyUpstream, transformFunctions$])
-            .pipe(
-                this.debug("readyUpstream and transformFunctions$ changed"),
-                switchMap(async ([streams, transform]) => {
-                    // Create a new stop signal for this run
-                    const currentTransformStop$ = new Subject();
-                    let isError = false;
-                    let transformedStreams;
-                    let error;
-
-                    try {
-                        const stopObservable = merge(
-                            this.nodeRemoved$,
-                            currentTransformStop$
-                        );
-                        stopObservable.subject = stopObservable;
-                        const errorObservable = this.transformErrors$;
-                        errorObservable.subject = errorObservable;
-
-                        transformedStreams = await transform(
-                            streams,
-                            stopObservable,
-                            errorObservable
-                        );
-                        if (!Array.isArray(transformedStreams)) {
-                            throw new Error(
-                                "Transform function must return an array of streams"
-                            );
-                        }
-                    } catch (e) {
-                        isError = true;
-                        error = e;
-                        console.error("An error occurred:", error);
-                        console.log(streams, transform);
-                        violentError$.next(true);
-                    }
-
-                    return {
-                        transformedStreams,
-                        originalStreams: streams,
-                        isError,
-                        error,
-                        currentTransformStop$,
-                    };
-                }),
-                scan(
-                    (
-                        acc,
-                        {
-                            transformedStreams,
-                            originalStreams,
-                            isError,
-                            error,
-                            currentTransformStop$,
-                        }
-                    ) => {
-                        if (isError) {
-                            transformedStreams = acc.prevTransformed;
-                        } else {
-                            // If a previous transform stop signal exists, trigger it
-                            if (acc.lastTransformStop$) {
-                                acc.lastTransformStop$.next();
-                                acc.lastTransformStop$.complete();
-                            }
-
-                            // Set the current transform stop signal as the last one
-                            acc.lastTransformStop$ = currentTransformStop$;
-                        }
-
-                        acc.prevTransformed = transformedStreams;
-                        if (!transformedStreams) {
-                            violentError$.next(true);
-                        }
-                        return {
-                            prevTransformed: acc.prevTransformed,
-                            transformed: transformedStreams,
-                            originalStreams,
-                            lastTransformStop$: acc.lastTransformStop$,
-                        };
-                    },
-                    {
-                        prevTransformed: null,
-                        transformed: null,
-                        originalStreams: null,
-                        lastTransformStop$: null,
-                    }
-                ),
-                this.debug("transformedStreams changed"),
-                filter(({ transformed }) => transformed !== null),
-                map(({ transformed, originalStreams }) => {
-                    const chainables = originalStreams.filter(
-                        (stream) =>
-                            stream.chainable && !transformed.includes(stream)
-                    );
-                    return [this.meta, ...transformed, ...chainables];
-                }),
-                takeUntil(this.nodeRemoved$)
-            )
-            .subscribe(this.downstream);
+        this.applyTransforms();
 
         this.getInput("api_key")
             .subject.pipe(
@@ -1001,7 +990,8 @@ export class MagicTransformer extends Transformer {
             .subscribe(this.openaiApi);
 
         this.initialCode$ = this.transformCode$.subject.pipe(
-            filter((e) => e.code),
+            this.debug("transformCode$ changed"),
+            filter((e) => e && e.code),
             this.debug("transformCode$ changed"),
             takeUntil(this.nodeRemoved$),
             share()
@@ -1010,10 +1000,8 @@ export class MagicTransformer extends Transformer {
         const needRevisedCode$ = this.meta.subject.pipe(
             filter((e) => e && e.name !== "New Magic Node"),
             this.debug("needRevisedCode$ meta changed"),
-            withLatestFrom(this.readyUpstream, this.initialCode$),
-            this.debug(
-                "meta changed and readyUpstream and initialCode$ changed"
-            ),
+            withLatestFrom(this.upstream, this.initialCode$),
+            this.debug("meta changed and upstream and initialCode$ changed"),
             filter(
                 ([meta, upstream, transform]) =>
                     !(meta.fromStore && transform.fromStore)
@@ -1064,9 +1052,7 @@ export class MagicTransformer extends Transformer {
         );
 
         const needFirstCode$ = combineLatest(
-            this.readyUpstream.pipe(
-                this.debug("needFirstCode$ readyUpstream changed")
-            ),
+            this.upstream.pipe(this.debug("needFirstCode$ upstream changed")),
             this.meta.subject.pipe(
                 this.debug("needFirstCode$ meta changed"),
                 filter((e) => e && e.name !== "New Magic Node")
@@ -1086,7 +1072,7 @@ export class MagicTransformer extends Transformer {
             .pipe(
                 this.debug("needCode$ changed"),
                 withLatestFrom(
-                    this.readyUpstream,
+                    this.upstream,
                     this.meta.subject.pipe(
                         filter((e) => e && e.name !== "New Magic Node")
                     )
@@ -1140,13 +1126,9 @@ export class MagicTransformer extends Transformer {
         this.initialCode$
             .pipe(
                 filter((e) => e.code),
+                this.debug("initialCode$ make into function"),
                 mergeMap(this.createAsyncFunctionFromString.bind(this)),
                 this.debug("initialCode$ made into function"),
-                tap((e) => {
-                    if (!e) {
-                        violentError$.next(true);
-                    }
-                }),
                 filter((e) => e),
                 this.debug(
                     "initialCode$ transformed into function successfully"
@@ -1154,13 +1136,29 @@ export class MagicTransformer extends Transformer {
                 takeUntil(this.nodeRemoved$),
                 share()
             )
-            .subscribe(transformFunctions$);
+            .subscribe(this.transformFunctions$);
 
         // this.downstream.pipe(skip(2)).subscribe(() => this.requestSnapshot());
     }
 
     createStream(definition) {
         return new Stream(this, definition);
+    }
+
+    createChatInput() {
+        const chatInput = document.createElement("chat-input");
+        chatInput.subject = new Subject();
+        chatInput.handleFocus = () => {
+            this.selected = true;
+            this.editorNode.requestUpdate();
+        };
+        chatInput.handleBlur = () => {
+            this.selected = false;
+            this.editorNode.requestUpdate();
+        };
+
+        this.component.replaceChildren(chatInput);
+        return chatInput.subject;
     }
 
     createForm(definition) {
@@ -1188,6 +1186,204 @@ export class MagicTransformer extends Transformer {
         this.component.replaceChildren(rjsfComponent);
 
         return [onChange, onSubmit];
+    }
+
+    watchUpstreams() {
+        const rawUpstreams$ = this.canvas.editorStream.pipe(
+            filter((event) => event),
+            this.debug("rawUpstreams$ got editor event"),
+            filter((event) =>
+                ["connectioncreated", "connectionremoved"].includes(event.type)
+            ),
+            map((event) => ({
+                type: event.type,
+                sourceNode: this.canvas.editor.getNode(event.data.source),
+                targetNode: this.canvas.editor.getNode(event.data.target),
+            })),
+            filter(({ targetNode }) => targetNode.id === this.id),
+            scan((connectedNodes, { type, sourceNode }) => {
+                return type === "connectioncreated"
+                    ? [...connectedNodes, sourceNode]
+                    : connectedNodes.filter(
+                          (node) => node.id !== sourceNode.id
+                      );
+            }, []),
+            startWith([]),
+            this.debug("rawUpstreams$ changed"),
+            switchMap((connectedNodes) => {
+                const downstreams = connectedNodes.map(
+                    (node) => node.downstream
+                );
+                return combineLatest(downstreams).pipe(
+                    map((arrays) => {
+                        const uniqueArray = [...new Set([].concat(...arrays))];
+                        // Always include meta object in the upstream
+                        return [this.meta, ...uniqueArray];
+                    })
+                );
+            }),
+            this.debug("rawUpstreams$ combined downstreams"),
+            distinctUntilChanged((v1, v2) =>
+                deepEqual(
+                    v1.map(({ id }) => id).sort(),
+                    v2.map(({ id }) => id).sort()
+                )
+            ),
+            this.debug("upstream changed"),
+            takeUntil(this.nodeRemoved$),
+            shareReplay()
+        );
+
+        const lastUpstream = new ReplaySubject(1);
+        rawUpstreams$.subscribe(lastUpstream);
+
+        this.canvas.store.updates.read
+            .pipe(
+                take(1), // Take only the first emission from b$
+                switchMap(() =>
+                    concat(
+                        lastUpstream, // Emit the last value from a$
+                        rawUpstreams$ // Then emit all values from a$
+                    )
+                ),
+                filter((streams) => {
+                    const minStreams = Math.max(
+                        2,
+                        (streams.filter((stream) => stream.type === "meta")
+                            .length -
+                            1) *
+                            2
+                    );
+                    // console.log(
+                    //     "upstream filter,",
+                    //     !this.hasConnection("inputs"),
+                    //     minStreams,
+                    //     streams.length
+                    // );
+                    if (!this.hasConnection("inputs")) {
+                        // we're loaded but not connected to anything, so we're ready
+                        return true;
+                    }
+
+                    // we need at least one stream from each upstream node other than ourselves.
+                    // this should be more thorough.
+                    if (streams.length >= minStreams) {
+                        return true;
+                    }
+                }),
+                this.debug("upstream filter passed"),
+                takeUntil(this.nodeRemoved$)
+            )
+            .subscribe(this.upstream);
+    }
+
+    applyTransforms() {
+        combineLatest([this.upstream, this.transformFunctions$])
+            .pipe(
+                this.debug("upstream and transformFunctions$ changed"),
+                switchMap(async ([streams, transform]) => {
+                    // Create a new stop signal for this run
+                    const currentTransformStop$ = new Subject();
+                    let isError = false;
+                    let transformedStreams;
+                    let error;
+
+                    try {
+                        const stopObservable = merge(
+                            this.nodeRemoved$,
+                            currentTransformStop$
+                        );
+                        stopObservable.subject = stopObservable;
+                        const errorObservable = this.transformErrors$;
+                        errorObservable.subject = errorObservable;
+
+                        transformedStreams = await transform(
+                            streams,
+                            stopObservable,
+                            errorObservable
+                        );
+                        if (!Array.isArray(transformedStreams)) {
+                            throw new Error(
+                                "Transform function must return an array of streams"
+                            );
+                        }
+
+                        if (
+                            !transformedStreams.every(
+                                (stream) => stream instanceof Stream
+                            )
+                        ) {
+                            throw new Error(
+                                "Transform function must return an array of streams"
+                            );
+                        }
+                    } catch (e) {
+                        isError = true;
+                        error = e;
+                        console.error("An error occurred:", error);
+                        console.log(streams, transform);
+                        this.transformErrors$.next(e);
+                    }
+
+                    return {
+                        transformedStreams,
+                        originalStreams: streams,
+                        isError,
+                        error,
+                        currentTransformStop$,
+                    };
+                }),
+                scan(
+                    (
+                        acc,
+                        {
+                            transformedStreams,
+                            originalStreams,
+                            isError,
+                            error,
+                            currentTransformStop$,
+                        }
+                    ) => {
+                        if (isError) {
+                            transformedStreams = acc.prevTransformed;
+                        } else {
+                            // If a previous transform stop signal exists, trigger it
+                            if (acc.lastTransformStop$) {
+                                acc.lastTransformStop$.next();
+                                acc.lastTransformStop$.complete();
+                            }
+
+                            // Set the current transform stop signal as the last one
+                            acc.lastTransformStop$ = currentTransformStop$;
+                        }
+
+                        acc.prevTransformed = transformedStreams;
+                        return {
+                            prevTransformed: acc.prevTransformed,
+                            transformed: transformedStreams,
+                            originalStreams,
+                            lastTransformStop$: acc.lastTransformStop$,
+                        };
+                    },
+                    {
+                        prevTransformed: null,
+                        transformed: null,
+                        originalStreams: null,
+                        lastTransformStop$: null,
+                    }
+                ),
+                this.debug("transformedStreams changed"),
+                filter(({ transformed }) => transformed !== null),
+                map(({ transformed, originalStreams }) => {
+                    const chainables = originalStreams.filter(
+                        (stream) =>
+                            stream.chainable && !transformed.includes(stream)
+                    );
+                    return [this.meta, ...transformed, ...chainables];
+                }),
+                takeUntil(this.nodeRemoved$)
+            )
+            .subscribe(this.downstream);
     }
 
     parseSingleCodeBlock(markdown) {
@@ -1234,6 +1430,7 @@ export class MagicTransformer extends Transformer {
         } catch (e) {
             console.error("Error importing function:", e);
 
+            this.transformErrors$.next(e);
             // Revoke the object URL to free up memory even in case of an error
             URL.revokeObjectURL(objectURL);
 

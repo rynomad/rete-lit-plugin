@@ -26,17 +26,7 @@ import {
     Presets as LitPresets,
 } from "../dist/rete-litv-plugin.esm.local.js";
 import "./form.js";
-function getUID() {
-    if ("randomBytes" in crypto) {
-        return crypto.randomBytes(8).toString("hex");
-    }
-
-    const bytes = crypto.getRandomValues(new Uint8Array(8));
-    const array = Array.from(bytes);
-    const hexPairs = array.map((b) => b.toString(16).padStart(2, "0"));
-
-    return hexPairs.join("");
-}
+import { getUID } from "./util.js";
 
 export class TransformerInput extends Classic.Input {
     constructor(inputConfig) {
@@ -439,9 +429,23 @@ export class TransformerNode extends LitPresets.classic.Node {
         super();
         this.test = Math.random();
 
-        this.resizeObserver = new ResizeObserver(() => {
-            // Your callback code here
-            this.handleResize();
+        let prevWidth = 0;
+        let prevHeight = 0;
+
+        this.resizeObserver = new ResizeObserver((entries) => {
+            for (let entry of entries) {
+                const newWidth = entry.contentRect.width;
+                const newHeight = entry.contentRect.height;
+
+                if (
+                    Math.abs(newWidth - prevWidth) > 10 ||
+                    Math.abs(newHeight - prevHeight) > 10
+                ) {
+                    this.handleResize();
+                    prevWidth = newWidth;
+                    prevHeight = newHeight;
+                }
+            }
         });
         // Add initialization code here
         this.initComponent();
@@ -487,7 +491,7 @@ export class TransformerNode extends LitPresets.classic.Node {
 
     handleResize() {
         this.emit({
-            type: "noderesized",
+            type: "custom-node-resize",
             data: { ...this.data, element: this.element },
         });
 
@@ -540,7 +544,7 @@ export class TransformerNode extends LitPresets.classic.Node {
                     border-radius: 10px;
                     cursor: pointer;
                     box-sizing: border-box;
-                    min-width: calc(var(--node-width) * 2);
+                    width: 70vw;
                     height: auto;
                     position: relative;
                     user-select: none;
@@ -851,11 +855,16 @@ export class Transformer extends Classic.Node {
 
     set selected(value) {
         this._selected = value;
-        this.canvas.zoom();
+        this.editorNode.emit({
+            type: "custom-node-selected",
+            data: this,
+        });
     }
 
     requestSnapshot() {
-        this.ide.getCanvasById(this.canvasId).store.createSnapshot();
+        this.ide
+            .getCanvasById(this.canvasId)
+            .store.snapshotRequests.next({ id: Math.random() });
     }
 
     socketKey(label) {

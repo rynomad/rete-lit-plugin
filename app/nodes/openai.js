@@ -23,6 +23,8 @@ const StreamRenderer = CardStyleMixin(
                 display: block;
                 padding: 16px;
                 color: var(--stream-renderer-text-color, black);
+                white-space: pre-wrap;
+                user-select: text;
             }
         `;
 
@@ -37,6 +39,7 @@ const StreamRenderer = CardStyleMixin(
         connectedCallback() {
             super.connectedCallback();
             this.stream?.pipe(filter((e) => e)).subscribe((content) => {
+                console.log("stream content", content);
                 if (typeof content === "string") {
                     this.renderContent(content);
                 } else content.subscribe(this.renderContent.bind(this));

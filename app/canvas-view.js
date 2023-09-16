@@ -9,12 +9,14 @@ import {
     distinctUntilChanged,
     BehaviorSubject,
 } from "https://esm.sh/rxjs";
+import { structures } from "https://esm.sh/rete-structures";
 export class CanvasView {
     constructor(canvas) {
         this.canvas = canvas;
+        this.graph = structures(canvas.editor);
         this.arrangeObserver = new BehaviorSubject();
 
-        this.arrangeObserver.pipe(debounceTime(500)).subscribe((nodes) => {
+        this.arrangeObserver.subscribe((nodes) => {
             // console.log("trigger arrange", nodes);
             this.canvas.layoutArrange(nodes);
         });

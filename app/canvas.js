@@ -34,7 +34,24 @@ import { BetterDomSocketPosition } from "./socket-position.js";
 import { Connection } from "./connection.js";
 import { CanvasStore } from "./canvas-store.js";
 import { CanvasView } from "./canvas-view.js";
-import { BehaviorSubject, first, share } from "https://esm.sh/rxjs";
+import {
+    BehaviorSubject,
+    first,
+    scan,
+    share,
+    take,
+    ReplaySubject,
+    switchMap,
+    merge,
+    map,
+    filter,
+    withLatestFrom,
+} from "https://esm.sh/rxjs";
+
+import { structures } from "https://esm.sh/rete-structures";
+
+import "./canvas-sidebar.js";
+import "./tabs.js";
 
 export class Canvas {
     constructor(ide, { canvasId, name } = {}) {
@@ -46,9 +63,12 @@ export class Canvas {
         this.snapshots = this.store.snapshots;
         this.container = null;
         this.editor = new NodeEditor();
-        this.ready$ = new Promise((resolve) =>
-            this.store.updates.pipe(first((v) => v === true)).subscribe(resolve)
-        );
+        this.editorStream = new ReplaySubject(1);
+        this.areaStream = new ReplaySubject(1);
+        this.editor.addPipe((context) => {
+            this.editorStream.next(context);
+            return context;
+        });
     }
     generateGUID() {
         return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
@@ -65,6 +85,10 @@ export class Canvas {
         const editor = this.editor;
         const area = (this.area = new AreaPlugin(container));
 
+        this.area.addPipe((context) => {
+            this.areaStream.next(context);
+            return context;
+        });
         const litRender = new LitPlugin();
 
         const contextMenu = new ContextMenuPlugin({
@@ -126,17 +150,22 @@ export class Canvas {
         RerouteExtensions.selectablePins(reroutePlugin, selector, accumulating);
 
         this.view = new CanvasView(this);
-
-        this.editorStream = new BehaviorSubject();
-        this.editor.addPipe((context) => {
-            this.editorStream.next(context);
-            return context;
-        });
     }
 
     async initialize() {
         await this.createEditor(this.container);
+        this.initSidebar();
+
         this.store.initEditorPipe();
+    }
+
+    initSidebar() {
+        const sidebar = document.createElement("canvas-sidebar");
+        this.container.appendChild(sidebar);
+
+        this.areaStream
+            .pipe(filter((context) => context.type === "custom-node-selected"))
+            .subscribe(sidebar.subject);
     }
 
     setupArrange() {
@@ -166,40 +195,211 @@ export class Canvas {
             },
         }));
         this.area.use(this.arrange);
-        this.applier = new ArrangeAppliers.TransitionApplier({
-            duration: 500,
-            timingFunction: (t) => t,
-            onTick: () => {
-                // if (this.getZoomNodes().some((node) => node.selected)) {
-                //     this.zoom();
-                // }
-            },
+
+        this.store.updates.read.pipe(take(1)).subscribe((nodes) => {
+            nodes = this.editor.getNodes();
+            AreaExtensions.zoomAt(this.area, nodes);
+            const applier = new ArrangeAppliers.TransitionApplier({
+                duration: 200,
+                timingFunction: (t) => t,
+                onTick: () => {
+                    AreaExtensions.zoomAt(this.area, nodes);
+                },
+            });
+
+            this.arrange.layout({
+                applier,
+                options: { "elk.direction": "DOWN" },
+            });
         });
+
+        merge(this.editorStream, this.areaStream)
+            .pipe(
+                withLatestFrom(this.store.updates.read),
+                map(([context, updates]) => context),
+                filter((context) =>
+                    [
+                        "noderemoved",
+                        "connectioncreated",
+                        "connectionremoved",
+                        "custom-node-resize",
+                        "custom-node-selected",
+                    ].includes(context.type)
+                ),
+                scan((acc, value) => {
+                    if (acc && acc.cancel) {
+                        acc.cancel();
+                    }
+                    const applier = new ArrangeAppliers.TransitionApplier({
+                        duration: 200,
+                        timingFunction: (t) => t,
+                        onTick: () => {
+                            this.zoom();
+                        },
+                    });
+
+                    this.arrange.layout({
+                        applier,
+                        options: { "elk.direction": "DOWN" },
+                    });
+
+                    return applier;
+                }, null)
+            )
+            .subscribe();
     }
 
-    async layoutArrange(nodes = this.editor.getNodes()) {
+    async layoutArrange(nodes = this.editor.getNodes(), instant = true) {
         // console.log("layout");
-        this.zoomNodes = this.getZoomNodes(nodes);
-        this.arrange.layout({
-            applier: this.applier,
-            options: { "elk.direction": "DOWN" },
-        }); // Include your existing code for arranging layout here.
-        if (!this.firstZoom) {
-            this.zoom();
-            this.firstZoom = true;
-        }
+        // this.applier = this.zoomNodes = this.getZoomNodes(nodes);
+        // this.arrange.layout({
+        //     applier: this.applier,
+        //     options: { "elk.direction": "DOWN" },
+        // }); // Include your existing code for arranging layout here.
+        // this.zoom();
     }
 
     zoom() {
-        this.zoomNodes = this.getZoomNodes();
-        AreaExtensions.zoomAt(this.area, this.zoomNodes);
+        const nodes = this.getZoomNodes();
+        // const scale = 0.8;
+        // const nodeRects = nodes
+        //     .map((node) => ({ view: this.area.nodeViews.get(node.id), node }))
+        //     .filter((item) => item.view)
+        //     .map(({ view, node }) => {
+        //         const { width, height } = node;
+
+        //         if (
+        //             typeof width !== "undefined" &&
+        //             typeof height !== "undefined"
+        //         ) {
+        //             return {
+        //                 position: view.position,
+        //                 width,
+        //                 height,
+        //             };
+        //         }
+
+        //         return {
+        //             position: view.position,
+        //             width: view.element.clientWidth,
+        //             height: view.element.clientHeight,
+        //         };
+        //     });
+
+        // const boundingBox = AreaExtensions.getBoundingBox(this.area, nodeRects);
+        // const [w, h] = [
+        //     this.container.clientWidth,
+        //     this.container.clientHeight,
+        // ];
+        // const [kw, kh] = [w / boundingBox.width, h / boundingBox.height];
+        // const k = Math.min(kh * scale, kw * scale, 1);
+
+        // const target_x = w / 2 - boundingBox.center.x * k;
+        // const target_y = h / 2 - boundingBox.center.y * k;
+        // this.area.translate(k, target_x, target_y);
+        // this.area.area.zoom(k, 0, 0);
+
+        AreaExtensions.zoomAt(this.area, nodes);
     }
 
     getZoomNodes() {
-        const nodes = this.editor.getNodes();
-        return nodes.some((node) => node.selected)
-            ? nodes.filter((node) => node.selected)
-            : this.editor.getNodes();
+        const graph = structures(this.editor);
+
+        // start with either the leaves or the selected nodes
+        let nodes = this.editor.getNodes().filter((node) => node.selected);
+        if (!nodes.length) {
+            nodes = graph.leaves().nodes() || [];
+        }
+
+        let _nodes = nodes;
+        // if we have downstream, we want one layer in view
+        if (
+            nodes.some((node) => graph.outgoers(node.id).nodes().length) &&
+            nodes.some((node) => graph.incomers(node.id).nodes().length)
+        ) {
+            _nodes = Array.from(
+                new Set(
+                    _nodes
+                        .concat(
+                            nodes.map((node) => graph.outgoers(node.id).nodes())
+                        )
+                        .flat()
+                )
+            );
+            _nodes = Array.from(
+                new Set(
+                    _nodes
+                        .concat(
+                            nodes.map((node) => graph.incomers(node.id).nodes())
+                        )
+                        .flat()
+                )
+            );
+        } else if (
+            nodes.some((node) => graph.incomers(node.id).nodes().length)
+        ) {
+            // otherwise, we want two layers upstream, so insert one here
+            _nodes = Array.from(
+                new Set(
+                    _nodes
+                        .concat(
+                            nodes.map((node) => graph.incomers(node.id).nodes())
+                        )
+                        .flat()
+                )
+            );
+            _nodes = Array.from(
+                new Set(
+                    _nodes
+                        .concat(
+                            nodes
+                                .map((node) =>
+                                    graph
+                                        .incomers(node.id)
+                                        .nodes()
+                                        .map((node) =>
+                                            graph.incomers(node.id).nodes()
+                                        )
+                                )
+                                .flat()
+                        )
+                        .flat()
+                )
+            );
+        } else if (
+            nodes.some((node) => graph.outgoers(node.id).nodes().length)
+        ) {
+            // otherwise, we want two layers upstream, so insert one here
+            _nodes = Array.from(
+                new Set(
+                    _nodes
+                        .concat(
+                            nodes.map((node) => graph.outgoers(node.id).nodes())
+                        )
+                        .flat()
+                )
+            );
+            _nodes = Array.from(
+                new Set(
+                    _nodes
+                        .concat(
+                            nodes
+                                .map((node) =>
+                                    graph
+                                        .outgoers(node.id)
+                                        .nodes()
+                                        .map((node) =>
+                                            graph.outgoers(node.id).nodes()
+                                        )
+                                )
+                                .flat()
+                        )
+                        .flat()
+                )
+            );
+        }
+
+        return _nodes;
     }
 
     async attach(container) {

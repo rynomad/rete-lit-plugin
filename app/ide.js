@@ -9,7 +9,8 @@ import { Transformer } from "./transformer.js";
 import "./nodes/adhoc.js";
 import "./nodes/openai.js";
 import "./nodes/magic.js";
-class CanvasLitElement extends LitElement {
+import "./chat.js";
+class IDEElement extends LitElement {
     static get styles() {
         return css`
             :host {
@@ -390,4 +391,4 @@ class CanvasLitElement extends LitElement {
 }
 
 // Define the new element
-customElements.define("bespeak-ide", CanvasLitElement);
+customElements.define("bespeak-ide", IDEElement);
