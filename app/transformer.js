@@ -27,7 +27,7 @@ import {
 } from "../dist/rete-litv-plugin.esm.local.js";
 import "./form.js";
 import { getUID } from "./util.js";
-
+import { Subject, takeUntil } from "https://esm.sh/rxjs";
 export class TransformerInput extends Classic.Input {
     constructor(inputConfig) {
         super(
@@ -142,16 +142,52 @@ const TransformerDebugCard = PropagationStopper(
                 }
             `;
 
+            constructor() {
+                super();
+                this.destroy$ = new Subject();
+            }
+
+            subscribeToSubjects(key, label) {
+                this[key][label].subject
+                    .pipe(takeUntil(this.destroy$))
+                    .subscribe((v) => {
+                        this.requestUpdate();
+                    });
+            }
+
+            unsubscribeAll() {
+                this.destroy$.next();
+            }
+
             connectedCallback() {
                 super.connectedCallback();
-                // Attach observers for inputs, outputs, and intermediates
+                // Initial subscription when connected
                 for (const key of ["inputs", "outputs", "intermediates"]) {
                     for (const label in this[key]) {
-                        this[key][label].subject.subscribe((v) => {
-                            this.requestUpdate();
-                        });
+                        this.subscribeToSubjects(key, label);
                     }
                 }
+            }
+
+            updated(changedProperties) {
+                for (const [prop, oldValue] of changedProperties) {
+                    if (["inputs", "outputs", "intermediates"].includes(prop)) {
+                        // Unsubscribe from old observables
+                        this.unsubscribeAll();
+
+                        // Subscribe to new observables
+                        for (const label in this[prop]) {
+                            this.subscribeToSubjects(prop, label);
+                        }
+                    }
+                }
+            }
+
+            disconnectedCallback() {
+                // Complete the destroy$ subject to unsubscribe from all subscriptions
+                this.destroy$.next();
+                this.destroy$.complete();
+                super.disconnectedCallback();
             }
 
             render() {
@@ -199,216 +235,6 @@ const TransformerDebugCard = PropagationStopper(
         }
     )
 );
-class TabHeader extends LitElement {
-    static styles = css`
-        :host {
-            display: flex;
-            justify-content: flex-end;
-            margin-top: 0.4rem;
-            border: none;
-            background-color: transparent;
-        }
-        dile-tab {
-            flex-grow: 1;
-            text-align: center;
-            background-color: transparent;
-            border: none;
-            transition: background-color 0.3s ease;
-            margin: 0;
-        }
-        dile-tab:hover,
-        dile-tab.open:hover {
-            background-color: rgba(0, 0, 0, 0.1); /* darkening on hover */
-        }
-        dile-tab.open {
-            background-color: rgba(
-                255,
-                255,
-                255,
-                0.1
-            ); /* lightening when open */
-        }
-        dile-tab.icon {
-            display: flex; /* Allow centering */
-            align-items: flex-start; /* Vertical centering */
-            justify-content: center; /* Horizontal centering */
-            flex-shrink: 0; /* Prevent shrinking */
-            flex-grow: 0;
-        }
-        dile-tab.icon .icon-svg {
-            width: 20px; /* Fill the parent container */
-            height: 20px; /* Fill the parent container */
-            transform: translateY(-3px);
-        }
-        dile-tabs {
-            width: 100%;
-            justify-content: end;
-        }
-    `;
-
-    static properties = {
-        inputs: { type: Array },
-        openPages: { type: Array },
-        handleToggle: { type: Function },
-    };
-
-    render() {
-        return html`
-            <dile-tabs
-                id="select2"
-                attrForSelected="name"
-                selectorId="selector"
-                @dile-selected-changed=${this.handleToggle}>
-                ${this.inputs.map(
-                    (entry) => html`<dile-tab
-                        class="${this.openPages.includes(entry.label)
-                            ? "open"
-                            : ""} ${entry.icon ? "icon" : ""}"
-                        icon="label_important"
-                        name="${entry.label}"
-                        selected="false">
-                        ${entry.icon
-                            ? html`<div class="icon-svg">${entry.icon}</div>`
-                            : entry.label}
-                    </dile-tab>`
-                )}
-            </dile-tabs>
-        `;
-    }
-}
-
-customElements.define("tab-header", PropagationStopper(TabHeader));
-
-class CustomTabs extends LitElement {
-    static styles = css`
-        main.selectionlayout {
-            --dile-tab-selected-background-color: transparent; /* or transparent */
-            --dile-tab-background-color: transparent; /* or transparent */
-            --dile-tab-border-radius: 0; /* or initial */
-            --dile-tab-selected-line-color: transparent; /* or initial */
-            --dile-tab-selected-line-height: 0; /* or initial */
-            --dile-tab-selected-text-color: dimgray; /* or initial */
-            --dile-tab-text-color: dimgray; /* or initial */
-            --dile-tab-text-transform: uppercase; /* or initial */
-            display: flex;
-            flex-direction: column;
-        }
-        .name-heading {
-            text-align: center;
-            padding: 2rem;
-            font-size: 1.3rem;
-            font-weight: bold;
-        }
-        main.selectionlayout dile-pages {
-            margin: 0;
-            padding: 0;
-        }
-        main.selectionlayout dile-page {
-            margin: 0;
-            padding: 0;
-        }
-        main.selectionlayout dile-pages h2 {
-            margin-top: 0;
-        }
-        .input-forms {
-            display: flex;
-            flex-direction: row;
-        }
-
-        .form {
-            flex-grow: 1;
-            width: 0px;
-        }
-
-        .form.hide {
-            margin: 0px;
-            padding: 0px;
-        }
-
-        .form.open {
-            width: 100%;
-            min-width: 400px;
-        }
-    `;
-
-    static properties = {
-        inputs: { type: Array },
-        name: { type: String },
-    };
-
-    constructor() {
-        super();
-        this.inputs = [];
-        // Use an array to keep track of open tabs
-        this.openPages = [];
-    }
-
-    handleToggle(e) {
-        const selectedTab = e.detail.selected;
-        const index = this.openPages.indexOf(selectedTab);
-        // If the tab is already open, remove it from the array; otherwise, add it
-        if (index >= 0) {
-            this.openPages.splice(index, 1);
-        } else {
-            this.openPages.push(selectedTab);
-        }
-        this.requestUpdate();
-    }
-
-    closeAll() {
-        this.openPages = [];
-        this.requestUpdate();
-    }
-
-    openSelect(pages) {
-        this.openPages = pages;
-        this.requestUpdate();
-    }
-
-    openUnsubscribed() {
-        this.openPages = this.inputs
-            .filter((i) => !i.subscription && i.schema)
-            .map((i) => i.label);
-        this.requestUpdate();
-    }
-
-    render() {
-        return html`
-            <main class="selectionlayout">
-                <tab-header
-                    .inputs=${this.inputs.filter((i) => i.display !== false)}
-                    .openPages=${this.openPages}
-                    .handleToggle=${this.handleToggle.bind(this)}></tab-header>
-
-                <div class="name-heading">${this.name}</div>
-                <div class="input-forms">
-                    ${this.inputs
-                        .filter((entry) => entry.display !== false)
-                        .map((entry) => {
-                            console.log(entry);
-                            const open = !!this.openPages.find(
-                                (input) => input === entry.label
-                            );
-                            if (entry.html) {
-                                return entry.html(open);
-                            }
-                            // console.log(entry);
-                            return html`
-                                <rjsf-component
-                                    is-open="${open}"
-                                    .props="${entry}"
-                                    class="form ${open
-                                        ? "open"
-                                        : "hide"}"></rjsf-component>
-                            `;
-                        })}
-                </div>
-            </main>
-        `;
-    }
-}
-
-customElements.define("custom-tabs", CustomTabs);
 
 customElements.define("transformer-debug-card", TransformerDebugCard);
 
@@ -623,23 +449,6 @@ export class TransformerNode extends LitPresets.classic.Node {
         );
     }
 
-    get mappedInputsWithDebug() {
-        return this.inputs().map(([key, input]) => ({
-            ...input,
-            onChange: (e) =>
-                input.showSubmit ? null : input.subject.next(e.formData),
-            onSubmit: (e) => {
-                input.subject.next(e.formData);
-                setTimeout(() => this.data.requestSnapshot(), 100);
-            },
-            uiSchema: setSubmitButtonOptions(input.uiSchema, {
-                norender: !input.showSubmit,
-                submitText: "send",
-            }),
-            formData: input.subject.getValue() || {},
-        }));
-    }
-
     addFrozenProperty(schema) {
         // Base case: if the schema is not an object, return
         if (!(schema && typeof schema === "object" && schema.properties)) {
@@ -688,21 +497,23 @@ export class TransformerNode extends LitPresets.classic.Node {
 
                     <div class="flex-row output-sockets">
                         <!-- Outputs -->
-                        ${this.outputs().map(
-                            ([key, output]) => html`
-                                <ref-element
-                                    class="output-socket"
-                                    .data=${{
-                                        type: "socket",
-                                        side: "output",
-                                        key: key,
-                                        nodeId: this.data?.id,
-                                        payload: output.socket,
-                                    }}
-                                    .emit=${this.emit}
-                                    data-testid="output-socket"></ref-element>
-                            `
-                        )}
+                        ${this.outputs()
+                            .filter(([_, output]) => output.display)
+                            .map(
+                                ([key, output]) => html`
+                                    <ref-element
+                                        class="output-socket"
+                                        .data=${{
+                                            type: "socket",
+                                            side: "output",
+                                            key: key,
+                                            nodeId: this.data?.id,
+                                            payload: output.socket,
+                                        }}
+                                        .emit=${this.emit}
+                                        data-testid="output-socket"></ref-element>
+                                `
+                            )}
                     </div>
                 </div>
             </div>
@@ -1094,65 +905,7 @@ export class Transformer extends Classic.Node {
                     `${className}-${ioConfig.label}`
                 );
                 if (!globalSubject) {
-                    const ajv = new Ajv();
                     globalSubject = new BehaviorSubject();
-                    globalSubject
-                        .pipe(
-                            filter((data) => data),
-                            filter((data) =>
-                                ajv.validate(ioInstance.schema, data)
-                            ), // Validate against the schema
-                            timeout(5000), // Set a timeout of 5 seconds
-                            catchError(() => {
-                                // Create your custom LitElement for the form
-                                def.onChange = (e) => {};
-                                def.onSubmit = (e) => {
-                                    console.log("onSubmit", e);
-                                    ioInstance.subject.next(e.formData);
-                                    this.requestSnapshot();
-                                };
-                                const rjsfComponent =
-                                    document.createElement("rjsf-component");
-                                rjsfComponent.setAttribute("is-open", "true");
-                                rjsfComponent.props = def;
-
-                                ioInstance.subject
-                                    .pipe(
-                                        filter((data) =>
-                                            ajv.validate(
-                                                ioInstance.schema,
-                                                data
-                                            )
-                                        ), // Validate against the schema
-                                        take(1)
-                                    )
-                                    .subscribe(() => {
-                                        // Close the SweetAlert2 popup
-                                        Swal.close();
-                                    });
-
-                                // Show a non-cancelable SweetAlert2 popup
-                                const swalOptions = {
-                                    title: "Required Configuration",
-                                    html: rjsfComponent,
-                                    allowOutsideClick: false,
-                                    allowEscapeKey: false,
-                                    showConfirmButton: false,
-                                    showCloseButton: false,
-                                    customClass: {
-                                        popup: "custom-popup-class",
-                                    },
-                                };
-                                Swal.fire(swalOptions);
-
-                                // Return an empty observable to complete the pipeline
-                                return of();
-                            }),
-                            take(1)
-                        )
-                        .subscribe((validData) => {
-                            // Do something with the valid data
-                        });
                 }
                 ioInstance.subject.subscribe(globalSubject);
                 globalSubject.subscribe(ioInstance.subject);
@@ -1321,13 +1074,4 @@ export class Transformer extends Classic.Node {
     }
 
     data() {}
-}
-
-function setSubmitButtonOptions(uiSchema, options) {
-    const newUiSchema = uiSchema || {};
-    newUiSchema["ui:submitButtonOptions"] = {
-        ...newUiSchema["ui:submitButtonOptions"], // Preserve existing options if they exist
-        ...options, // Merge with new options
-    };
-    return newUiSchema;
 }

@@ -18,11 +18,7 @@ class IDEElement extends LitElement {
                 height: 100vh;
             }
             .wrapper {
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
+                display: flex;
                 opacity: 0;
                 pointer-events: none;
                 transition: opacity 0.5s ease-in-out;
@@ -32,6 +28,7 @@ class IDEElement extends LitElement {
                 opacity: 1;
                 pointer-events: all;
                 z-index: 1;
+                flex-grow: 1;
             }
             .content {
                 position: relative;
@@ -142,6 +139,7 @@ class IDEElement extends LitElement {
             const newContainer = document.createElement("div");
             newContainer.classList.add("content");
 
+            newWrapper.appendChild(newContainer);
             const newCanvas = new Canvas(this, canvasMetadata);
             await newCanvas.attach(newContainer);
             newCanvas.area.container.addEventListener(
@@ -152,8 +150,6 @@ class IDEElement extends LitElement {
                 "drop",
                 this.drop.bind(this)
             );
-
-            newWrapper.appendChild(newContainer);
 
             this.canvasCache[canvasMetadata.canvasId] = {
                 wrapper: newWrapper,

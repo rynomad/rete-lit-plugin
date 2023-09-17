@@ -147,3 +147,42 @@ export function getUID() {
 
     return hexPairs.join("");
 }
+
+export function addDefaultValuesToSchema(schema) {
+    if (schema.type === "object") {
+        schema.properties = schema.properties || {};
+        schema.required = schema.required || [];
+
+        schema.required.forEach((key) => {
+            if (schema.properties[key].type === "object") {
+                schema.properties[key].default =
+                    schema.properties[key].default || {};
+                addDefaultValuesToSchema(schema.properties[key]);
+            } else if (schema.properties[key].type === "array") {
+                schema.properties[key].default =
+                    schema.properties[key].default || [];
+                addDefaultValuesToSchema(schema.properties[key]);
+            }
+        });
+
+        for (const key of Object.keys(schema.properties)) {
+            if (
+                schema.properties[key].type === "object" &&
+                !schema.properties[key].default
+            ) {
+                addDefaultValuesToSchema(schema.properties[key]);
+            }
+        }
+    } else if (schema.type === "array") {
+        schema.default = schema.default || [];
+
+        if (
+            schema.items &&
+            (schema.items.type === "object" || schema.items.type === "array")
+        ) {
+            addDefaultValuesToSchema(schema.items);
+        }
+    }
+
+    return schema;
+}

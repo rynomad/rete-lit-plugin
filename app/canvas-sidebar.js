@@ -3,6 +3,7 @@ import { Subject } from "https://esm.sh/rxjs@7.3.0";
 import { sanitizeAndRenderYaml } from "./util.js";
 import { PropagationStopper } from "./mixins.js";
 import "./tabs.js";
+import "./yaml.js";
 
 import "https://esm.sh/@dile/dile-pages/dile-pages.js";
 import "https://esm.sh/@dile/dile-tabs/dile-tabs.js";
@@ -17,10 +18,10 @@ class MySidebar extends PropagationStopper(LitElement) {
     static styles = css`
         :host {
             display: block;
-            position: absolute;
             right: 0;
             top: 0;
-            width: 30rem;
+            min-width: 27rem;
+            max-width: 27rem;
             height: 100%;
             z-index: 999;
             background-color: #fff;
@@ -41,6 +42,7 @@ class MySidebar extends PropagationStopper(LitElement) {
         super();
         this.subject = new Subject();
         this.data = {};
+        this.activeTabIndex = 0;
 
         // Subscribe to the subject to update the `data` property whenever new data is emitted.
         this.subject.subscribe(({ data }) => {
@@ -127,8 +129,9 @@ class MySidebar extends PropagationStopper(LitElement) {
                     <div name="Config">
                         ${this.config?.map(
                             (entry) =>
-                                html`<rjsf-component
-                                    .props=${entry}></rjsf-component>`
+                                html`<div>${entry.node.id}</div>
+                                    <rjsf-component
+                                        .props=${entry}></rjsf-component>`
                         )}
                     </div>
                     <div name="Global">
@@ -139,9 +142,9 @@ class MySidebar extends PropagationStopper(LitElement) {
                         )}
                     </div>
                     <div name="Debug">
-                        <transformer-debug-card
-                            .inputs=${this.inputs}
-                            .outputs=${this.outputs}></transformer-debug-card>
+                        <yaml-renderer
+                            .data=${this.data}
+                            .preamble=${"# Context\n\nThe context below can be inserted into chats by means of the config tab. Selecting specific values to embed into the chat messages will be coming in a future update. For now, they are simply inserted into a system message with your request."}></yaml-renderer>
                     </div>
                 </dile-pages>
             </div>

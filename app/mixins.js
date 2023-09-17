@@ -99,7 +99,6 @@ export const CardStyleMixin = dedupeMixin(
                         overflow: auto;
                         transition: max-height 0.5s ease-out,
                             margin 0.5s ease-out, padding 0.5s ease-out;
-                        max-height: 40vh; /* default max height */
                         max-width: 80vw;
                         cursor: auto;
                     }

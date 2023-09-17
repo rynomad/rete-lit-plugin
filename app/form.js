@@ -6,7 +6,14 @@ import { SafeSubject as BehaviorSubject } from "./safe-subject.js";
 import { PropagationStopper, CardStyleMixin } from "./mixins.js";
 import { bootstrapCss } from "./bootstrap.css.js";
 import "./react.js";
-
+export function setSubmitButtonOptions(uiSchema, options) {
+    const newUiSchema = uiSchema || {};
+    newUiSchema["ui:submitButtonOptions"] = {
+        ...newUiSchema["ui:submitButtonOptions"], // Preserve existing options if they exist
+        ...options, // Merge with new options
+    };
+    return newUiSchema;
+}
 export const RJSFComponent = CardStyleMixin(
     PropagationStopper(
         class RJSFComponentBase extends LitElement {
@@ -34,22 +41,39 @@ export const RJSFComponent = CardStyleMixin(
                     schema: {},
                     uiSchema: {},
                     formData: {},
-                    onSubmit: () => {},
-                    onChange: (e) => {
-                        console.log("onchange");
-                        this.form.next(e.formData);
-                    }, // Send change events to the Subject
+                    onSubmit: (e) => {
+                        this.props.subject?.next(e.formData);
+                        this.props.node?.requestSnapshot();
+                    },
                     validator: validator,
                 };
                 // console.log("props?", this.props);
             }
 
+            updated(changedProperties) {
+                if (this.reactWrapper && changedProperties.has("props")) {
+                    this.reactWrapper.props = {
+                        ...this.reactWrapper.props,
+                        formData: this.props.subject?.getValue(),
+                    };
+                }
+            }
+
             firstUpdated() {
-                const reactWrapper = document.createElement("react-wrapper");
-                reactWrapper.stylesheet =
-                    "https://esm.sh/bootstrap@4/dist/css/bootstrap.min.css";
+                const reactWrapper = (this.reactWrapper =
+                    document.createElement("react-wrapper"));
                 reactWrapper.reactComponent = Form;
-                reactWrapper.props = { ...this._props, ...this.props };
+                reactWrapper.props = {
+                    ...this._props,
+                    ...this.props,
+                    formData: this.props.subject?.getValue(),
+                    uiSchema: setSubmitButtonOptions(
+                        this.props.uiSchema || {},
+                        {
+                            submitText: "Save",
+                        }
+                    ),
+                };
                 reactWrapper.props.subject?.subscribe((e) => {
                     console.log("react-wrapper", e);
                     reactWrapper.props = { ...reactWrapper.props, formData: e };

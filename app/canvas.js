@@ -94,7 +94,7 @@ export class Canvas {
         const contextMenu = new ContextMenuPlugin({
             items: ContextMenuPresets.classic.setup([]),
         });
-        const minimap = new MinimapPlugin();
+        // const minimap = new MinimapPlugin();
         const reroutePlugin = new ReroutePlugin();
         const connection = new ConnectionPlugin();
         connection.addPreset(ConnectionPresets.classic.setup());
@@ -103,7 +103,7 @@ export class Canvas {
 
         area.use(litRender);
         area.use(contextMenu);
-        area.use(minimap);
+        // area.use(minimap);
         area.use(connection);
         litRender.use(reroutePlugin);
 
@@ -161,7 +161,7 @@ export class Canvas {
 
     initSidebar() {
         const sidebar = document.createElement("canvas-sidebar");
-        this.container.appendChild(sidebar);
+        this.container.parentElement.appendChild(sidebar);
 
         this.areaStream
             .pipe(filter((context) => context.type === "custom-node-selected"))

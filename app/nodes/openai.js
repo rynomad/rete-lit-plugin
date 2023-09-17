@@ -16,48 +16,72 @@ import { CardStyleMixin } from "../mixins.js";
 import { Transformer, TransformerInput } from "../transformer.js";
 import { SafeSubject as BehaviorSubject } from "../safe-subject.js";
 
-const StreamRenderer = CardStyleMixin(
-    class extends LitElement {
-        static styles = css`
-            :host {
-                display: block;
-                padding: 16px;
-                color: var(--stream-renderer-text-color, black);
-                white-space: pre-wrap;
-                user-select: text;
-            }
-        `;
+const StreamRenderer = class extends LitElement {
+    static styles = css`
+        :host {
+            display: block;
+            // padding: 16px;
+            // color: var(--stream-renderer-text-color, black);
 
-        static properties = {
-            stream: { type: Object },
-        };
-
-        constructor() {
-            super();
+            // user-select: text;
+            // display: block;
+            background-color: #f5f5f5;
+            border-radius: 10px;
+            box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+            margin: 15px;
+            // margin: 15px;
+            // padding: 15px;
+            // max-width: 80vw;
+            // cursor: auto;
         }
 
-        connectedCallback() {
-            super.connectedCallback();
-            this.stream?.pipe(filter((e) => e)).subscribe((content) => {
-                console.log("stream content", content);
-                if (typeof content === "string") {
-                    this.renderContent(content);
-                } else content.subscribe(this.renderContent.bind(this));
-            });
+        .content {
+            color: var(--stream-renderer-text-color, black);
         }
 
-        renderContent(content) {
-            this.content = content ? marked(content) : "";
-            this.requestUpdate();
-        }
+        // p:last-of-type {
+        //     margin-bottom: -45px;
+        // }
 
-        render() {
-            return html`
-                <div class="content">${unsafeHTML(this.content)}</div>
-            `;
+        // p:first-of-type {
+        //     margin-top: -25px;
+        // }
+        .content.show {
+            padding: 15px;
+            // white-space: pre-wrap;
+            user-select: text;
         }
+    `;
+
+    static properties = {
+        stream: { type: Object },
+    };
+
+    constructor() {
+        super();
     }
-);
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.stream?.pipe(filter((e) => e)).subscribe((content) => {
+            console.log("stream content", content);
+            if (typeof content === "string") {
+                this.renderContent(content);
+            } else content.subscribe(this.renderContent.bind(this));
+        });
+    }
+
+    renderContent(content) {
+        this.content = content ? marked(content.trim()) : "";
+        this.requestUpdate();
+    }
+
+    render() {
+        return html`<div class="content ${this.content ? "show" : "hide"}">
+            ${unsafeHTML(this.content)}
+        </div> `;
+    }
+};
 
 customElements.define("stream-renderer", StreamRenderer);
 

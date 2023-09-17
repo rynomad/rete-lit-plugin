@@ -62,17 +62,10 @@ export class MetadataComponent extends LitElement {
                 .subscribe(({ name, description }) => {
                     const currentName =
                         this.shadowRoot.getElementById("name")?.innerText;
-                    const currentDescription =
-                        this.shadowRoot.getElementById(
-                            "description"
-                        )?.innerText;
 
+                    this.name = name;
                     if (name !== currentName) {
                         this.requestUpdate("name", name);
-                    }
-
-                    if (description !== currentDescription) {
-                        this.requestUpdate("description", description);
                     }
                 });
         }
@@ -129,7 +122,6 @@ export class MetadataComponent extends LitElement {
     }
 
     render() {
-        const { name, description } = this.subject.getValue() || {};
         return html`
             <div
                 id="name"
@@ -138,16 +130,7 @@ export class MetadataComponent extends LitElement {
                 @input=${this.onInput}
                 @focus=${this.onFocus}
                 @blur=${this.onBlur}>
-                ${name}
-            </div>
-            <div
-                id="description"
-                class="text-input description"
-                contenteditable
-                @input=${this.onInput}
-                @focus=${this.onFocus}
-                @blur=${this.onBlur}>
-                ${description}
+                ${this.name || "Magic Node"}
             </div>
         `;
     }

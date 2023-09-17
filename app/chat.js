@@ -1,5 +1,5 @@
 import { html, css, LitElement } from "https://esm.sh/lit";
-import { Subject } from "https://esm.sh/rxjs";
+import { Subject, filter, take } from "https://esm.sh/rxjs";
 import { PropagationStopper } from "./mixins.js";
 class ChatInput extends PropagationStopper(LitElement) {
     static get properties() {
@@ -65,6 +65,24 @@ class ChatInput extends PropagationStopper(LitElement) {
         super();
         this.messageSubject = new Subject();
         this.message = "";
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+
+        setTimeout(() => {
+            this.subject
+                .pipe(
+                    filter((e) => e.fromStore),
+                    take(1)
+                )
+                .subscribe((e) => {
+                    const editableDiv =
+                        this.shadowRoot.querySelector(".editable");
+
+                    editableDiv.innerText = e.message;
+                });
+        });
     }
 
     handleInputChange(e) {

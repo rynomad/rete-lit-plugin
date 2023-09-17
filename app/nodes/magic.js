@@ -1,6 +1,6 @@
 import { Transformer } from "../transformer.js";
 import { uuid4 } from "https://esm.sh/uuid4";
-
+import React from "https://esm.sh/react@18.2.0?bundle";
 import { LitElement, html, css } from "https://esm.sh/lit@2.0.2";
 import Ajv from "https://esm.sh/ajv@8.6.3";
 import "../meta.js";
@@ -27,16 +27,18 @@ import {
     mergeMap,
     ReplaySubject,
     from,
+    skipUntil,
+    debounceTime,
 } from "https://esm.sh/rxjs@7.3.0";
+import { deepEqual } from "https://esm.sh/fast-equals";
 import * as rxjs from "https://esm.sh/rxjs@7.3.0";
-import { adaptiveDebounce, hashPOJO } from "../util.js";
+import { adaptiveDebounce, hashPOJO, sanitizeAndRenderYaml } from "../util.js";
 import OpenAI from "https://esm.sh/openai";
 import Swal from "https://esm.sh/sweetalert2";
-import { openDB } from "https://esm.sh/idb@6.0.0";
-import { deepEqual } from "https://esm.sh/fast-equals";
 import { PropagationStopper } from "../mixins.js";
 import { Readability } from "https://esm.sh/@mozilla/readability";
 import { getUID } from "../util.js";
+import { Stream } from "../stream.js";
 // Make sure to import your `ExtendedNode` class and `node-meta-component`
 // import { ExtendedNode } from './ExtendedNode';
 // customElements.define('node-meta-component', NodeMetaComponent);
@@ -143,10 +145,50 @@ function chatTransform(inputs, stopObservable, errorObservable) {
 
     const output = this.createStream(chatMessagesSchema);
 
+    output.subject
+        .pipe(
+            filter((e) => e?.fromStore && e?.length > 0),
+            map((e) => JSON.parse(JSON.stringify(e)).flat().pop().content),
+            this.debug("chat messages"),
+            debounceTime(100)
+        )
+        .subscribe((e) => this.chatStreams.next(e));
+
+    formSubject
+        .pipe(
+            tap((e) => console.log("formSubject", e)),
+            skipUntil(this.canvas.store.updates.read),
+            filter(
+                (e) =>
+                    e?.message?.length > 0 &&
+                    !e?.fromStore &&
+                    e?.message?.toLowerCase().startsWith("build me")
+            )
+        )
+        .subscribe((e) => {
+            this.meta.subject.next({
+                name: "new node",
+                description: e.message,
+            });
+            this.build$.next({
+                name: "build",
+                description: e.message,
+            });
+            takeUntil(stopObservable);
+        });
     // Combine the latest form subject values with the gpt-messages
     combineLatest([formSubject, gptMessages$])
         .pipe(
-            filter(([value]) => value.message),
+            tap((e) => console.log("formSubject and gptMessages@", e)),
+            skipUntil(this.canvas.store.updates.read),
+            tap((e) => console.log("formSubject and gptMessages@", e)),
+            filter(
+                ([value, messages]) =>
+                    value.message &&
+                    !messages.fromStore &&
+                    !value.message.toLowerCase().startsWith("build me")
+            ),
+            tap((e) => console.log("formSubject and gptMessages@", e)),
             map(([formValue, gptMessages]) => {
                 return [
                     ...gptMessages,
@@ -156,6 +198,16 @@ function chatTransform(inputs, stopObservable, errorObservable) {
                     },
                 ];
             }),
+            tap((e) => console.log("formSubject and gptMessages@", e)),
+
+            this.chatMap({ stream: true }),
+            takeUntil(stopObservable)
+        )
+        .subscribe(output.subject);
+
+    formSubject
+        .pipe(
+            skipUntil(this.canvas.store.updates.read),
             tap(async (value) => {
                 if (!this.hasConnection("outputs")) {
                     const nextNode = new MagicTransformer(
@@ -178,12 +230,15 @@ function chatTransform(inputs, stopObservable, errorObservable) {
                     };
                     view.translate(translate.x, translate.y);
                     await this.editor.addConnection(connection);
+                    nextNode.component
+                        .querySelector("chat-input")
+                        .shadowRoot.querySelector(".editable")
+                        .focus();
                 }
             }),
-            this.chatMap({ stream: true }),
             takeUntil(stopObservable)
         )
-        .subscribe(output.subject);
+        .subscribe();
     return [output];
 }
 
@@ -227,199 +282,17 @@ class MagicElement extends PropagationStopper(LitElement) {
         }
     `;
 
-    showDebug() {
-        const inputs = this.node.upstream.getValue();
-        const outputs = this.node.downstream.getValue();
-        const debug = document.createElement("transformer-debug-card");
-        debug.inputs = inputs;
-        debug.outputs = outputs;
-
-        const swalOptions = {
-            title: "Debug",
-            html: debug, // Your custom DOM element
-            width: "70vw",
-            height: "70vh",
-            textAlign: "left",
-            showCloseButton: true,
-            showCancelButton: false,
-            showConfirmButton: false,
-            allowOutsideClick: true,
-            allowEscapeKey: true,
-            customClass: {
-                popup: "custom-popup-class",
-            },
-        };
-
-        // Show the SweetAlert2 popup
-        this.node.Swal.fire(swalOptions);
-    }
-
     render() {
         return html`
             <node-meta-component
                 .subject=${this.metaSubject}></node-meta-component>
             <slot></slot>
             <stream-renderer .stream=${this.node.chatStreams}></stream-renderer>
-            <button @click=${this.showDebug}>show debug</button>
         `;
     }
 }
 
 customElements.define("magic-element", MagicElement);
-
-class Stream {
-    static db = "bespeak-streams";
-
-    constructor(node, definition) {
-        Object.assign(this, definition);
-        this.node = node;
-        this.id = ["meta", "transform"].some((type) => type === definition.type)
-            ? `${this.node.id}-${definition.type}`
-            : `${this.node.id}-${definition.name
-                  .toLowerCase()
-                  .replace(/ /g, "-")}`;
-        this.socket = node.canvas.socket;
-        this.name = definition.name;
-        this.description = definition.description;
-        this.schema = definition.schema;
-        this.type = definition.type;
-        this.snapshot = definition.snapshot;
-        this.firstCreation = new Subject();
-        this.createIndexedDBSubject();
-    }
-
-    get read() {
-        return this.subject.pipe(filter((value) => value !== undefined));
-    }
-
-    async createIndexedDBSubject() {
-        this.queue = new Subject();
-        this.subject = new BehaviorSubject(this.getDefaultValue());
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        this.queue
-            .pipe(
-                withLatestFrom(this.subject),
-                distinctUntilChanged(([_, v1], [__, v2]) => deepEqual(v1, v2)),
-                filter(([queue, value]) => !queue),
-                tap(() => this.queue.next(true)),
-                mergeMap(async ([_queue, value]) => {
-                    await this.saveToDB(value);
-                    return value;
-                }),
-                tap(() => this.queue.next(false)),
-                // tap((value) => console.log("saved to db", value)),
-                takeUntil(this.node.nodeRemoved$)
-            )
-            .subscribe();
-
-        this.subject
-            .pipe(
-                withLatestFrom(this.queue),
-                filter(([_, queue]) => !queue),
-                takeUntil(this.node.nodeRemoved$)
-            )
-            .subscribe((value) => {
-                console.log("value", value);
-                this.queue.next(false);
-            });
-
-        if (!["meta", "transform"].includes(this.type)) {
-            return;
-        }
-
-        const db = await this.getDB();
-        const initialValue = await this.getInitialValue(db);
-
-        if (initialValue) {
-            initialValue.fromStore = true;
-            this.subject.next(initialValue);
-        }
-    }
-
-    getDefaultValue() {
-        const { schema } = this;
-
-        // Otherwise, generate default object based on schema
-        if (schema) {
-            const ajv = new Ajv({ strict: false, useDefaults: true });
-            const augmentedSchema = addDefaultValuesToSchema(schema);
-            const validate = ajv.compile(augmentedSchema);
-
-            // Create an object that will be populated with default values
-            const defaultData = {};
-
-            // Apply default values to the object based on schema
-            validate(defaultData);
-
-            return defaultData;
-        }
-
-        throw new Error("No schema provided.");
-    }
-
-    async getDB() {
-        let db;
-
-        // Open the database without specifying a version to get the current version
-        db = await openDB(Stream.db + "-" + this.type);
-        let dbVersion = db.version;
-
-        if (!db.objectStoreNames.contains(this.id)) {
-            db.close();
-            dbVersion++;
-            db = await openDB(Stream.db + "-" + this.type, dbVersion, {
-                upgrade: (db) => {
-                    db.createObjectStore(this.id, {
-                        autoIncrement: true,
-                    });
-                },
-            });
-        }
-        return db;
-    }
-
-    async getInitialValue(db) {
-        const tx = db.transaction(this.id, "readonly");
-        const store = tx.objectStore(this.id);
-        const result = await store.get("value");
-
-        if (!result || JSON.stringify(result) === "{}") {
-            this.firstCreation.next(true);
-        }
-
-        this.queue.next(false);
-
-        return result ? result : null;
-    }
-
-    async saveToDB(value) {
-        const db = await this.getDB();
-        const tx = db.transaction(this.id, "readwrite");
-        const store = tx.objectStore(this.id);
-        await store.put(value, "value");
-
-        await tx.done;
-        await db.close();
-
-        return tx.done;
-    }
-
-    toPromptString() {
-        if (this.type == "meta") {
-            this.name = this.subject.getValue().name;
-            this.description = this.subject.getValue().description;
-        }
-        // return markdown of the stream
-        // include: name, description, schema (in code block), id, node.id
-        return `## ${this.name}\n\n${this.description}\n\n\n\nStream id: ${
-            this.id
-        }\n\nNode id:${this.node.id}\`\`\`json\n${JSON.stringify(
-            this.schema,
-            null,
-            4
-        )}\n\`\`\``;
-    }
-}
 
 const MAGIC_PROMPT = `## Instructions for AI Chatbot
 
@@ -480,7 +353,8 @@ function (inputs, stopObservable, errorObservable) {
 - You MUST use this.cors(url) to wrap all URLs unless directed otherwise.
 - You SHOULD subscribe to upstream onSubmit inputs when dealing with form data, but you MAY do otherwise if it better fulfills the requirements.
 - You MUST not import any libraries that are not supported in the browser environment.
-- You SHOULD use this.Readability for any HTML parsing needs, but you MAY use another library if it better fulfills the requirements.
+- You MUST use this.Readability for any HTML parsing needs.
+- You MUST NOT use any HTML parsing libraries other than this.Readability, ESPECIALLY DO NOT USE JSDOM.
 - You MUST NOT use the 'format' key in any JSON schema.
 - You MUST include all outputs in the return value, you MUST NOT add any additional outputs to the output array asynchonously.
 - You MUST NOT use any meta inputs in your function unless directed otherwise. These are inputs that are meant for the system to use, not for your function to use.
@@ -542,7 +416,7 @@ function (inputs, stopObservable, errorObservable) {
     },
     "type": {
         "type": "string",
-        "description": "Optional. The type of stream. 'meta' and 'transform' streams are reserved for system use. All other types are available for your use."
+        "description": "The type tag of stream. 'meta' and 'transform' streams are reserved for system use. All other types are available for your use."
     },
     "schema": {
         "type": "object",
@@ -553,7 +427,7 @@ function (inputs, stopObservable, errorObservable) {
         "description": "a ui Schema to help render any forms via react-json-schema-form"
     }
   },
-  "required": ["name", "description", "schema"]
+  "required": ["name", "description", "type", "schema"]
 }
 \`\`\`
 
@@ -629,6 +503,17 @@ const MAGIC_QUESTIONS = [
     },
 ];
 
+const UpDownWidget = (props) => {
+    return React.createElement("input", {
+        type: "number",
+        className: "widget form-control",
+        step: "0.1",
+        value: props.value,
+        required: props.required,
+        onChange: (event) => props.onChange(event.target.valueAsNumber),
+    });
+};
+
 export class MagicTransformer extends Transformer {
     static Component = MagicElement;
     static inputs = [
@@ -658,6 +543,60 @@ export class MagicTransformer extends Transformer {
             },
         },
         {
+            label: "Chat GPT",
+            chainable: true,
+            display: false,
+            showSubmit: true,
+            schema: {
+                $schema: "http://json-schema.org/draft-07/schema#",
+                type: "object",
+                properties: {
+                    model: {
+                        type: "string",
+                        default: "gpt-4",
+                        enum: ["gpt-4", "gpt-3.5-turbo-0603"],
+                    },
+                    context: {
+                        type: "string",
+                        enum: ["yes", "no"],
+                        default: "yes",
+                        description:
+                            "Include the context from connected nodes in the chat history? If yes, the context will be included in the chat history as a system message. In the future, you will have more granular control via templates directly in the chat box.",
+                    },
+                    chooser: {
+                        type: "string",
+                        enum: ["single", "all"],
+                        default: "single",
+                        description:
+                            'This has no effect unless there are messages with multiple choices in the chat history. If "single", the first choice is used in each case where there are multiple. If "all", all results are included in the history, as a series of assistand messages.',
+                    },
+                    temperature: {
+                        type: "number",
+                        minimum: 0,
+                        maximum: 2,
+                        default: 0.4,
+                    },
+                    quantity: {
+                        type: "number",
+                        minimum: 1,
+                        maximum: 10,
+                        default: 1,
+                    },
+                },
+                required: ["model"],
+            },
+            uiSchema: {
+                model: {},
+                temperature: {
+                    "ui:widget": "updown",
+                },
+                stream: {},
+            },
+            widgets: {
+                updown: UpDownWidget,
+            },
+        },
+        {
             label: "inputs",
             multipleConnections: "zip",
         },
@@ -666,6 +605,7 @@ export class MagicTransformer extends Transformer {
     static outputs = [
         {
             label: "outputs",
+            display: true,
         },
     ];
 
@@ -717,6 +657,8 @@ export class MagicTransformer extends Transformer {
     transformErrors$ = new Subject();
     gpt = new BehaviorSubject(null);
     openaiApi = new BehaviorSubject(null);
+    build$ = new Subject();
+    streamErrors$ = new Subject();
 
     Swal = Swal;
     Readability = Readability;
@@ -728,18 +670,54 @@ export class MagicTransformer extends Transformer {
         this.corsProxyUrl = "http://localhost:8080/";
         this.cors = this.cors.bind(this);
         this.createStream = this.createStream.bind(this);
+        this.createForm = this.createForm.bind(this);
         this.nodeRemoved$ = new Subject();
         this.setup();
     }
 
+    // processIO(definitions, multipleConnections, addMethod) {
+    //     debugger;
+    //     for (const def of definitions) {
+    //         const ioConfig = {
+    //             ...def,
+    //             socket: this.socket,
+    //             subject: new BehaviorSubject(),
+    //             validate: this.createValidateFunction(def),
+    //             multipleConnections: true,
+    //             showControl: false,
+    //             node: this,
+    //         };
+    //         const ioClass = Stream;
+    //         const ioInstance = new ioClass(this, ioConfig);
+
+    //         ioConfig.subject.subscribe((value) => {
+    //             console.log("SPAM", this.id, value);
+    //         });
+
+    //         if (ioConfig.global) {
+    //             const className = this.constructor.toString().match(/\w+/g)[1];
+    //             let globalSubject = this.constructor.globals.get(
+    //                 `${className}-${ioConfig.label}`
+    //             );
+    //             if (!globalSubject) {
+    //                 globalSubject = new BehaviorSubject();
+    //             }
+    //             ioInstance.subject.subscribe(globalSubject);
+    //             globalSubject.subscribe(ioInstance.subject);
+    //             this.constructor.globals.set(
+    //                 `${className}-${ioConfig.label}`,
+    //                 globalSubject
+    //             );
+
+    //             ioInstance.display = false;
+    //         }
+
+    //         addMethod(ioInstance);
+    //     }
+    // }
+
     questionMap(config = {}) {
-        config.model ||= "gpt-4";
-        config.temperature ||= 0.4;
-        config.n = 1;
-        const mergeStrategy = config.mergeStrategy || "first";
-        delete config.mergeStrategy;
         const questions = config.questions;
-        delete config.questions;
         const questionMessage = [
             {
                 role: "system",
@@ -764,7 +742,14 @@ export class MagicTransformer extends Transformer {
             return this.openaiApi.pipe(
                 filter((openai) => !!openai),
                 take(1),
-                switchMap((openai) => {
+                withLatestFrom(this.getInput("Chat GPT").subject),
+                switchMap(([openai, config]) => {
+                    config = JSON.parse(JSON.stringify(config));
+                    const mergeStrategy = config.chooser || "single";
+                    delete config.mergeStrategy;
+                    config.n = config.quantity || 1;
+                    delete config.quantity;
+                    delete config.context;
                     try {
                         return openai.chat.completions
                             .create({
@@ -848,8 +833,13 @@ export class MagicTransformer extends Transformer {
     }
 
     async chatCall(config, openai) {
-        const remainder = config.quantity - 1;
-        const mergeStrategy = config.mergeStrategy || "first";
+        const mergeStrategy = config.chooser || "single";
+        delete config.chooser;
+        config.n = config.quantity || 1;
+        delete config.quantity;
+        delete config.context;
+        delete config.fromStore;
+        const remainder = config.n - 1;
 
         const stream = await openai.chat.completions.create({
             ...config,
@@ -902,20 +892,89 @@ export class MagicTransformer extends Transformer {
         ];
     }
 
-    chatMap(config = {}) {
-        config.model ||= "gpt-4";
-        config.temperature ||= 0.4;
-        return switchMap((messages) => {
+    get upstreamData$() {
+        return this.upstream.pipe(
+            switchMap((upstreamArray) =>
+                combineLatest(
+                    upstreamArray.map((upstreamObject) =>
+                        upstreamObject.subject.pipe(
+                            map((data) => ({
+                                id: upstreamObject.id,
+                                nodeId: upstreamObject.node.id,
+                                name: upstreamObject.name,
+                                type: upstreamObject.type,
+                                description: upstreamObject.description,
+                                data: data,
+                            }))
+                        )
+                    )
+                )
+            ),
+            takeUntil(this.nodeRemoved$)
+        );
+    }
+
+    get context$() {
+        return this.upstreamData$.pipe(
+            map((upstreamData) =>
+                upstreamData.reduce((nodes, current) => {
+                    let node = nodes.find((node) => node.id === current.nodeId);
+                    if (!node) {
+                        node = {
+                            id: current.nodeId,
+                            name: current.name,
+                            description: current.description,
+                            streams: [],
+                        };
+                        nodes.push(node);
+                    }
+                    if (current.type !== "meta") {
+                        node.streams.push(current);
+                    }
+                    return nodes;
+                }, [])
+            ),
+            takeUntil(this.nodeRemoved$)
+        );
+    }
+
+    get contextYaml$() {
+        return this.context$.pipe(
+            map((context) => sanitizeAndRenderYaml(context)),
+            takeUntil(this.nodeRemoved$)
+        );
+    }
+    chatMap() {
+        return switchMap((_messages) => {
             return this.openaiApi.pipe(
                 filter((openai) => !!openai),
                 take(1),
-                switchMap((openai) => {
-                    try {
-                        return this.chatCall({ ...config, messages }, openai);
-                    } catch (error) {
-                        // Handle synchronous errors if any
-                        return throwError(error);
+                withLatestFrom(
+                    this.getInput("Chat GPT").subject.read.pipe(
+                        filter((e) => e)
+                    )
+                ),
+                switchMap(([openai, config]) => {
+                    let start = from([]);
+                    if (config.context === "yes") {
+                        start = this.upstream;
                     }
+
+                    return start.pipe(
+                        switchMap((upstream) => {
+                            let messages = _messages;
+                            config = JSON.parse(JSON.stringify(config));
+                            try {
+                                return this.chatCall(
+                                    { ...config, messages },
+                                    openai
+                                );
+                            } catch (error) {
+                                // Handle synchronous errors if any
+                                return throwError(error);
+                            }
+                        })
+                    );
                 }),
                 catchError((error) => {
                     // Handle API errors here
@@ -936,12 +995,7 @@ export class MagicTransformer extends Transformer {
 
     debug(message) {
         return tap((value) => {
-            console.log(
-                this.id,
-                this.meta.subject.getValue().name,
-                message,
-                value
-            );
+            console.log(this.id, this.meta.name, message, value);
         });
     }
 
@@ -971,6 +1025,7 @@ export class MagicTransformer extends Transformer {
             .subscribe(this.nodeRemoved$);
 
         this.watchUpstreams();
+        this.autoChain();
 
         const needsRedoCode$ = this.transformErrors$;
 
@@ -1010,13 +1065,16 @@ export class MagicTransformer extends Transformer {
             map(([{ name, description }, upstream, transform]) => {
                 const code = transform.code;
                 const upstreamStreams = upstream.filter(
-                    (stream) => stream.id !== this.meta.id
+                    (stream) =>
+                        stream.id !== this.meta.id &&
+                        stream.name !== "New Magic Node"
                 );
                 const upstreamMeta = upstreamStreams.filter(
-                    (stream) => stream.meta
+                    (stream) => stream.type === "meta"
                 );
                 const upstreamAvailable = upstreamStreams.filter(
-                    (stream) => !stream.meta
+                    (stream) =>
+                        stream.type !== "meta" && stream.type !== "gpt-messages"
                 );
 
                 const content = [
@@ -1062,36 +1120,29 @@ export class MagicTransformer extends Transformer {
             )
         ).pipe(tap((e) => console.log("needFirstCode$", this.id, e)));
 
-        const needCode$ = merge(
-            needFirstCode$,
-            needRevisedCode$,
-            needsRedoCode$
-        );
+        const needCode$ = merge(needRevisedCode$, needsRedoCode$, this.build$);
 
         needCode$
             .pipe(
                 this.debug("needCode$ changed"),
-                withLatestFrom(
-                    this.upstream,
-                    this.meta.subject.pipe(
-                        filter((e) => e && e.name !== "New Magic Node")
-                    )
-                ),
+                withLatestFrom(this.upstream, this.build$),
                 this.debug("needCode$ with latest from upstream and meta"),
-                map(([needCode, upstream, _meta]) => {
+                map(([_build, upstream, build]) => {
                     const upstreamStreams = upstream.filter(
                         (stream) => stream.id !== this.meta.id
                     );
                     const upstreamMeta = upstreamStreams.filter(
-                        (stream) => stream.meta
+                        (stream) => stream.type === "meta"
                     );
                     const upstreamAvailable = upstreamStreams.filter(
-                        (stream) => !stream.meta
+                        (stream) =>
+                            stream.type !== "meta" &&
+                            stream.type !== "gpt-messages"
                     );
 
                     const content = [
                         `# Node to build`,
-                        this.meta.toPromptString(),
+                        build.description,
                         `# Upstream nodes`,
                         upstreamMeta.map((stream) => stream.toPromptString()),
                         `# Available streams`,
@@ -1115,7 +1166,7 @@ export class MagicTransformer extends Transformer {
                     return messages;
                 }),
                 this.chatMap(),
-                map((response) => response.choices[0].message.content),
+                map((messages) => messages.flat().pop().content),
                 filter((e) => e),
                 map(this.parseSingleCodeBlock),
                 filter((e) => e),
@@ -1141,13 +1192,107 @@ export class MagicTransformer extends Transformer {
         // this.downstream.pipe(skip(2)).subscribe(() => this.requestSnapshot());
     }
 
+    autoChain() {
+        this.upstream
+            .pipe(
+                this.debug("autoChain upstream changed"),
+                map(
+                    (upstream) =>
+                        new Set(
+                            upstream
+                                .map((stream) => stream.node)
+                                .filter((node) => node !== this)
+                        )
+                ),
+                filter((upstream) => upstream.size > 0),
+                distinctUntilChanged((v1, v2) => {
+                    const v1Ids = [...v1].map(({ id }) => id).sort();
+                    const v2Ids = [...v2].map(({ id }) => id).sort();
+                    return deepEqual(v1Ids, v2Ids);
+                }),
+                scan(
+                    (
+                        {
+                            connectedNodes,
+                            chatGPTSubscription,
+                            currentChatGPTNode,
+                        },
+                        upstream
+                    ) => {
+                        const newNodes = [...upstream].filter(
+                            (node) => !connectedNodes.has(node)
+                        );
+                        const removedNodes = [...connectedNodes].filter(
+                            (node) => !upstream.has(node)
+                        );
+
+                        // Handle new nodes
+                        if (!currentChatGPTNode) {
+                            const newNode = newNodes.find((node) =>
+                                node.getInput("Chat GPT")
+                            );
+                            if (newNode) {
+                                currentChatGPTNode = newNode;
+                                chatGPTSubscription = newNode
+                                    .getOutput("Chat GPT")
+                                    .subject.subscribe(
+                                        this.getInput("Chat GPT").subject
+                                    );
+                            }
+                        }
+
+                        // Handle removed nodes
+                        if (
+                            currentChatGPTNode &&
+                            removedNodes.includes(currentChatGPTNode)
+                        ) {
+                            chatGPTSubscription.unsubscribe();
+                            currentChatGPTNode = null;
+                        }
+
+                        return {
+                            connectedNodes: new Set([
+                                ...connectedNodes,
+                                ...newNodes,
+                            ]),
+                            chatGPTSubscription,
+                            currentChatGPTNode,
+                        };
+                    },
+                    {
+                        connectedNodes: new Set(),
+                        chatGPTSubscription: null,
+                        currentChatGPTNode: null,
+                    }
+                ),
+                this.debug("autoChain upstream subscription"),
+                takeUntil(this.nodeRemoved$)
+            )
+            .subscribe();
+    }
+
     createStream(definition) {
         return new Stream(this, definition);
     }
 
     createChatInput() {
+        const chatInputStream = this.createStream({
+            name: "Chat Input",
+            schema: {
+                $schema: "http://json-schema.org/draft-07/schema#",
+                type: "object",
+                properties: {
+                    message: {
+                        type: "string",
+                    },
+                },
+            },
+        });
         const chatInput = document.createElement("chat-input");
-        chatInput.subject = new Subject();
+        chatInput.subject = chatInputStream.subject.pipe(
+            filter((e) => e?.message),
+            shareReplay()
+        );
         chatInput.handleFocus = () => {
             this.selected = true;
             this.editorNode.requestUpdate();
