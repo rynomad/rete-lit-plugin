@@ -321,7 +321,6 @@ export class TransformerNode extends LitPresets.classic.Node {
             data: { ...this.data, element: this.element },
         });
 
-        this.data.canvas.view.queueArrange([this.data]);
         if (this.data.selected) {
             // this.data.canvas.zoom();
         }

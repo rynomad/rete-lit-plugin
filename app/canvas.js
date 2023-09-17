@@ -149,7 +149,7 @@ export class Canvas {
         AreaExtensions.selectableNodes(area, selector, { accumulating });
         RerouteExtensions.selectablePins(reroutePlugin, selector, accumulating);
 
-        this.view = new CanvasView(this);
+        // this.view = new CanvasView(this);
     }
 
     async initialize() {
@@ -304,102 +304,108 @@ export class Canvas {
 
     getZoomNodes() {
         const graph = structures(this.editor);
-
-        // start with either the leaves or the selected nodes
         let nodes = this.editor.getNodes().filter((node) => node.selected);
+        let stackHeight = 0;
+        let tallestNode = 0;
+
         if (!nodes.length) {
             nodes = graph.leaves().nodes() || [];
         }
 
-        let _nodes = nodes;
-        // if we have downstream, we want one layer in view
+        const getNodes = (direction, current) => {
+            return Array.from(
+                new Set(
+                    current.map((node) => graph[direction](node.id).nodes())
+                )
+            );
+        };
+
         if (
             nodes.some((node) => graph.outgoers(node.id).nodes().length) &&
             nodes.some((node) => graph.incomers(node.id).nodes().length)
         ) {
-            _nodes = Array.from(
-                new Set(
-                    _nodes
-                        .concat(
-                            nodes.map((node) => graph.outgoers(node.id).nodes())
-                        )
-                        .flat()
-                )
-            );
-            _nodes = Array.from(
-                new Set(
-                    _nodes
-                        .concat(
-                            nodes.map((node) => graph.incomers(node.id).nodes())
-                        )
-                        .flat()
-                )
-            );
+            const outgoers = getNodes("outgoers", nodes);
+            const box = AreaExtensions.getBoundingBox(this.area, [
+                ...nodes,
+                ...outgoers,
+            ]);
+            if (
+                AreaExtensions.getBoundingBox(this.area, [
+                    ...nodes,
+                    ...outgoers,
+                ]).height > this.container.clientHeight
+            ) {
+                return nodes;
+            }
+
+            nodes = [...nodes, ...outgoers];
+
+            const incomers = getNodes("incomers", nodes);
+            if (
+                AreaExtensions.getBoundingBox(this.area, [
+                    ...nodes,
+                    ...incomers,
+                ]).height > this.container.clientHeight
+            ) {
+                return nodes;
+            }
+
+            nodes = [...nodes, ...incomers];
         } else if (
             nodes.some((node) => graph.incomers(node.id).nodes().length)
         ) {
-            // otherwise, we want two layers upstream, so insert one here
-            _nodes = Array.from(
-                new Set(
-                    _nodes
-                        .concat(
-                            nodes.map((node) => graph.incomers(node.id).nodes())
-                        )
-                        .flat()
-                )
-            );
-            _nodes = Array.from(
-                new Set(
-                    _nodes
-                        .concat(
-                            nodes
-                                .map((node) =>
-                                    graph
-                                        .incomers(node.id)
-                                        .nodes()
-                                        .map((node) =>
-                                            graph.incomers(node.id).nodes()
-                                        )
-                                )
-                                .flat()
-                        )
-                        .flat()
-                )
-            );
+            let incomers = getNodes("incomers", nodes);
+            if (
+                AreaExtensions.getBoundingBox(this.area, [
+                    ...nodes,
+                    ...incomers,
+                ]).height > this.container.clientHeight
+            ) {
+                return nodes;
+            }
+
+            nodes = [...nodes, ...incomers];
+
+            incomers = getNodes("incomers", nodes);
+            if (
+                AreaExtensions.getBoundingBox(this.area, [
+                    ...nodes,
+                    ...incomers,
+                ]).height > this.container.clientHeight
+            ) {
+                return nodes;
+            }
+
+            nodes = [...nodes, ...incomers];
         } else if (
             nodes.some((node) => graph.outgoers(node.id).nodes().length)
         ) {
-            // otherwise, we want two layers upstream, so insert one here
-            _nodes = Array.from(
-                new Set(
-                    _nodes
-                        .concat(
-                            nodes.map((node) => graph.outgoers(node.id).nodes())
-                        )
-                        .flat()
-                )
-            );
-            _nodes = Array.from(
-                new Set(
-                    _nodes
-                        .concat(
-                            nodes
-                                .map((node) =>
-                                    graph
-                                        .outgoers(node.id)
-                                        .nodes()
-                                        .map((node) =>
-                                            graph.outgoers(node.id).nodes()
-                                        )
-                                )
-                                .flat()
-                        )
-                        .flat()
-                )
-            );
+            let outgoers = getNodes("outgoers", nodes);
+            if (
+                AreaExtensions.getBoundingBox(this.area, [
+                    ...nodes,
+                    ...outgoers,
+                ]).height > this.container.clientHeight
+            ) {
+                return nodes;
+            }
+
+            nodes = [...nodes, ...outgoers];
+
+            outgoers = getNodes("outgoers", nodes);
+            if (
+                AreaExtensions.getBoundingBox(this.area, [
+                    ...nodes,
+                    ...outgoers,
+                ]).height > this.container.clientHeight
+            ) {
+                return nodes;
+            }
+
+            nodes = [...nodes, ...outgoers];
         }
 
-        return _nodes;
+        return nodes.flat().flat();
     }
 
     async attach(container) {

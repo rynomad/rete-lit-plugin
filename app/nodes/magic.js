@@ -186,7 +186,7 @@ function chatTransform(inputs, stopObservable, errorObservable) {
             filter(
                 ([value, messages]) =>
                     value.message &&
-                    !messages.fromStore &&
+                    !(messages.fromStore && value.fromStore) &&
                     !value.message.toLowerCase().startsWith("build me")
             ),
             tap((e) => console.log("formSubject and gptMessages@", e)),
@@ -555,7 +555,7 @@ export class MagicTransformer extends Transformer {
                     model: {
                         type: "string",
                         default: "gpt-4",
-                        enum: ["gpt-4", "gpt-3.5-turbo-0603"],
+                        enum: ["gpt-4", "gpt-3.5-turbo-0613"],
                     },
                     context: {
                         type: "string",
