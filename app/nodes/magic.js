@@ -104,6 +104,7 @@ function chatTransform(inputs, stopObservable, errorObservable) {
         name: "chat messages",
         description: "gpt chat log",
         type: "gpt-messages",
+        ignoreContext: true,
         schema: {
             type: "array",
             items: {
@@ -612,6 +613,7 @@ export class MagicTransformer extends Transformer {
     meta = new Stream(this, {
         name: "meta",
         type: "meta",
+        ignoreContext: true,
         show: true,
         schema: {
             $schema: "http://json-schema.org/draft-07/schema#",
@@ -894,15 +896,20 @@ export class MagicTransformer extends Transformer {
 
     get upstreamData$() {
         return this.upstream.pipe(
+            this.debug("upstreamData$ upstream changed"),
             switchMap((upstreamArray) =>
                 combineLatest(
                     upstreamArray.map((upstreamObject) =>
                         upstreamObject.subject.pipe(
+                            this.debug(
+                                `upstreamData$ subject changed for ${upstreamObject.name}`
+                            ),
                             map((data) => ({
                                 id: upstreamObject.id,
                                 nodeId: upstreamObject.node.id,
                                 name: upstreamObject.name,
                                 type: upstreamObject.type,
+                                ignoreContext: upstreamObject.ignoreContext,
                                 description: upstreamObject.description,
                                 data: data,
                             }))
@@ -910,30 +917,46 @@ export class MagicTransformer extends Transformer {
                     )
                 )
             ),
+            this.debug("upstreamData$ combined latest upstream data"),
             takeUntil(this.nodeRemoved$)
         );
     }
 
     get context$() {
         return this.upstreamData$.pipe(
+            this.debug("context$ upstreamData$ changed"),
             map((upstreamData) =>
                 upstreamData.reduce((nodes, current) => {
                     let node = nodes.find((node) => node.id === current.nodeId);
                     if (!node) {
+                        const metaNode = upstreamData.find(
+                            (node) =>
+                                node.type === "meta" &&
+                                node.nodeId === current.nodeId
+                        );
                         node = {
                             id: current.nodeId,
-                            name: current.name,
-                            description: current.description,
+                            name: metaNode ? metaNode.data.name : current.name,
+                            description: metaNode
+                                ? metaNode.data.description
+                                : current.description,
                             streams: [],
                         };
                         nodes.push(node);
                     }
-                    if (current.type !== "meta") {
+                    if (!current.ignoreContext) {
                         node.streams.push(current);
                     }
                     return nodes;
                 }, [])
             ),
+            map((nodes) => {
+                return {
+                    self: nodes[0],
+                    upstream: nodes.slice(1),
+                };
+            }),
+            this.debug("context$ mapped upstream data to nodes"),
             takeUntil(this.nodeRemoved$)
         );
     }
@@ -994,8 +1017,24 @@ export class MagicTransformer extends Transformer {
     }
 
     debug(message) {
+        const error = new Error();
+        const callSite = error.stack.split("\n")[2];
+        const fileAndLineNumber = callSite.match(/\(([^)]+)\)/)?.[1];
         return tap((value) => {
-            console.log(this.id, this.meta.name, message, value);
+            this.meta.subject
+                .pipe(
+                    take(1),
+                    tap((meta) => {
+                        console.log(
+                            this.id,
+                            meta.name,
+                            message,
+                            value,
+                            fileAndLineNumber || ""
+                        );
+                    })
+                )
+                .subscribe();
         });
     }
 

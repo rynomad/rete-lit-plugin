@@ -25,14 +25,23 @@ class YamlRenderer extends LitElement {
 
     constructor() {
         super();
-        this.data = {};
-        this.data.contextYaml$ = new Subject();
+        // We should expect .data to be set by the one who constructs this lit element
+        // this.data = {};
+        // this.data.contextYaml$ = new Subject();
+    }
 
-        // Subscribe to the subject to update the `data` property whenever new data is emitted.
-        this.subscription = this.data.contextYaml$.subscribe((yaml) => {
-            this.yaml = yaml;
-            this.requestUpdate(); // Trigger a re-render.
-        });
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        if (changedProperties.has("data")) {
+            if (this.subscription) {
+                this.subscription.unsubscribe();
+            }
+            // Subscribe to the subject to update the `data` property whenever new data is emitted.
+            this.subscription = this.data.contextYaml$?.subscribe((yaml) => {
+                this.yaml = yaml;
+                this.requestUpdate(); // Trigger a re-render.
+            });
+        }
     }
 
     disconnectedCallback() {
@@ -44,18 +53,15 @@ class YamlRenderer extends LitElement {
     }
 
     render() {
-        // Parse the YAML and highlight it using Prism.js
-        let yamlObj = {};
-        let yamlStr = "";
+        // Highlight the YAML using Prism.js
         let highlightedYaml = "";
         if (this.yaml) {
-            yamlObj = load(this.yaml);
-            yamlStr = JSON.stringify(yamlObj, null, 2);
-            highlightedYaml = Prism.highlight(
-                yamlStr,
-                Prism.languages.json,
-                "json"
-            );
+            highlightedYaml = this.yaml;
+            // Prism.highlight(
+            //     this.yaml,
+            //     Prism.languages.yaml,
+            //     "yaml"
+            // );
         }
 
         // Render preamble as markdown if it exists
