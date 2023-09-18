@@ -80,7 +80,7 @@ class ChatInput extends PropagationStopper(LitElement) {
                     const editableDiv =
                         this.shadowRoot.querySelector(".editable");
 
-                    editableDiv.innerText = e.message;
+                    editableDiv.innerText = e.message || "";
                 });
         });
     }

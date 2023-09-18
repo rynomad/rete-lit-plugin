@@ -65,7 +65,7 @@ export class MetadataComponent extends LitElement {
 
                     this.name = name;
                     if (name !== currentName) {
-                        this.requestUpdate("name", name);
+                        this.requestUpdate();
                     }
                 });
         }

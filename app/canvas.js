@@ -261,6 +261,7 @@ export class Canvas {
 
     zoom() {
         const nodes = this.getZoomNodes();
+        if (!nodes) return;
         // const scale = 0.8;
         // const nodeRects = nodes
         //     .map((node) => ({ view: this.area.nodeViews.get(node.id), node }))
@@ -309,6 +310,7 @@ export class Canvas {
         let tallestNode = 0;
 
         if (!nodes.length) {
+            return null;
             nodes = graph.leaves().nodes() || [];
         }
 

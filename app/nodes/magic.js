@@ -1315,17 +1315,33 @@ export class MagicTransformer extends Transformer {
             )
             .subscribe(this.transformFunctions$);
 
-        this.upstream
+        const chatTransformStreams$ = this.upstream.pipe(
+            switchMap(async (upstream) => {
+                const unTransform = new Subject();
+                const stopObservable = merge(this.nodeRemoved$, unTransform);
+
+                const streams = await chatTransform.bind(this)(
+                    upstream,
+                    stopObservable,
+                    this.chatError$
+                );
+
+                return {
+                    streams,
+                    unTransform,
+                };
+            }),
+            scan((last, next) => {
+                last.unTransform?.next();
+                return next;
+            }, {}),
+            map(({ streams }) => streams),
+            share()
+        );
+        merge(chatTransformStreams$, this.transformDownstream)
             .pipe(
-                switchMap(async (upstream) => {
-                    return await chatTransform.bind(this)(
-                        upstream,
-                        this.nodeRemoved$,
-                        this.chatError$
-                    );
-                }),
-                withLatestFrom(this.transformDownstream),
-                map(([chatStreamOutput, transformStreams$]) => {
+                withLatestFrom(chatTransformStreams$, this.transformDownstream),
+                map(([_, chatStreamOutput, transformStreams$]) => {
                     return [
                         this.meta,
                         ...chatStreamOutput,
