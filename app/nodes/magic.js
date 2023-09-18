@@ -243,7 +243,7 @@ function chatTransform(inputs, stopObservable, errorObservable) {
                     view.translate(translate.x, translate.y);
                     await this.editor.addConnection(connection);
                     await new Promise((resolve) => setTimeout(resolve, 100));
-                    nextNode.component
+                    nextNode.component.shadowRoot
                         .querySelector("chat-input")
                         .shadowRoot.querySelector(".editable")
                         .focus();
@@ -1281,6 +1281,17 @@ export class MagicTransformer extends Transformer {
                     return messages;
                 }),
                 this.chatMap(),
+                tap((e) =>
+                    this.downstream
+                        .pipe(take(1))
+                        .subscribe((streams) =>
+                            streams
+                                .filter(
+                                    (stream) => stream.type === "gpt-messages"
+                                )
+                                .forEach((stream) => stream.subject.next(e))
+                        )
+                ),
                 map((messages) => messages.flat().pop().content),
                 filter((e) => e),
                 map(this.parseSingleCodeBlock),
