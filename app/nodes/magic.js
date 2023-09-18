@@ -29,6 +29,7 @@ import {
     from,
     skipUntil,
     debounceTime,
+    skip,
 } from "https://esm.sh/rxjs@7.3.0";
 import { deepEqual } from "https://esm.sh/fast-equals";
 import * as rxjs from "https://esm.sh/rxjs@7.3.0";
@@ -39,6 +40,7 @@ import { PropagationStopper } from "../mixins.js";
 import { Readability } from "https://esm.sh/@mozilla/readability";
 import { getUID } from "../util.js";
 import { Stream } from "../stream.js";
+import "../stream-renderer.js";
 // Make sure to import your `ExtendedNode` class and `node-meta-component`
 // import { ExtendedNode } from './ExtendedNode';
 // customElements.define('node-meta-component', NodeMetaComponent);
@@ -146,15 +148,6 @@ function chatTransform(inputs, stopObservable, errorObservable) {
 
     const output = this.createStream(chatMessagesSchema);
 
-    output.subject
-        .pipe(
-            filter((e) => e?.fromStore && e?.length > 0),
-            map((e) => JSON.parse(JSON.stringify(e)).flat().pop().content),
-            this.debug("chat messages"),
-            debounceTime(100)
-        )
-        .subscribe((e) => this.chatStreams.next(e));
-
     formSubject
         .pipe(
             tap((e) => console.log("formSubject", e)),
@@ -181,14 +174,29 @@ function chatTransform(inputs, stopObservable, errorObservable) {
     const chatMap = this.chatMap({ stream: true });
 
     // Combine the latest form subject values with the gpt-messages
-    combineLatest([
-        formSubject,
-        gptMessages$,
-        this.getInput("Chat GPT").subject.read,
-        this.contextYaml$,
-    ])
+    combineLatest([formSubject, gptMessages$, this.contextYaml$])
         .pipe(
+            withLatestFrom(this.getInput("Chat GPT").subject.read),
+            map(([[formValue, gptMessages, context], config]) => [
+                formValue,
+                gptMessages,
+                context,
+                config,
+            ]),
             this.debug("formSubject and gptMessages@"),
+            tap(() => {
+                output.subject
+                    .pipe(
+                        filter((e) => e?.fromStore && e?.length > 0),
+                        map(
+                            (e) =>
+                                JSON.parse(JSON.stringify(e)).flat().pop()
+                                    .content
+                        ),
+                        take(1)
+                    )
+                    .subscribe((e) => this.chatStreams.next(e));
+            }),
             skipUntil(this.canvas.store.updates),
             filter(
                 ([value, messages]) =>
@@ -199,7 +207,7 @@ function chatTransform(inputs, stopObservable, errorObservable) {
                     ) &&
                     !value.message.toLowerCase().startsWith("build me")
             ),
-            map(([formValue, gptMessages, config, context]) => {
+            map(([formValue, gptMessages, context, config]) => {
                 return [
                     ...gptMessages,
                     {
@@ -288,6 +296,23 @@ class MagicElement extends PropagationStopper(LitElement) {
             });
     }
 
+    handleFocus() {
+        this.node.selected = true;
+        const node = this.node;
+        this.node.canvas.selector.add({
+            id: this.node.id,
+            unselect() {
+                node.selected = false;
+            },
+            translate() {},
+        });
+        this.node.editorNode.emit({ type: "focus", data: this.node });
+    }
+
+    handleBlur() {
+        this.node.canvas.selector.remove({ id: this.node.id });
+    }
+
     static styles = css`
         :host {
             display: block;
@@ -299,6 +324,8 @@ class MagicElement extends PropagationStopper(LitElement) {
             <node-meta-component
                 .subject=${this.metaSubject}></node-meta-component>
             <chat-input
+                .handleFocus=${this.handleFocus.bind(this)}
+                .handleBlur=${this.handleBlur.bind(this)}
                 .subject=${this.node.chatInputStream.subject}></chat-input>
             <slot></slot>
             <stream-renderer .stream=${this.node.chatStreams}></stream-renderer>
@@ -1138,6 +1165,18 @@ export class MagicTransformer extends Transformer {
         this.autoChain();
 
         const needsRedoCode$ = this.transformErrors$;
+        this.transformErrors$
+            .pipe(takeUntil(this.nodeRemoved$))
+            .subscribe((error) => {
+                this.Swal.fire({
+                    toast: true,
+                    position: "bottom-right",
+                    title: `Error in ${this.meta.name}`,
+                    text: error.message,
+                    showConfirmButton: false,
+                    timerProgressBar: true,
+                });
+            });
 
         this.applyTransforms();
 
@@ -1154,87 +1193,79 @@ export class MagicTransformer extends Transformer {
             )
             .subscribe(this.openaiApi);
 
-        this.initialCode$ = this.transformCode$.subject.pipe(
-            this.debug("transformCode$ changed"),
-            filter((e) => e && e.code),
-            this.debug("transformCode$ changed"),
-            takeUntil(this.nodeRemoved$),
-            share()
-        );
+        // const needRevisedCode$ = this.meta.subject.pipe(
+        //     filter((e) => e && e.name !== "New Magic Node"),
+        //     this.debug("needRevisedCode$ meta changed"),
+        //     withLatestFrom(
+        //         this.upstream,
+        //         this.initialCode$,
+        //         this.metaContextYaml$
+        //     ),
+        //     this.debug("meta changed and upstream and initialCode$ changed"),
+        //     filter(
+        //         ([meta, upstream, transform]) =>
+        //             !(meta.fromStore && transform.fromStore)
+        //     ),
+        //     this.debug("needRevisedCode$ check"),
+        //     map(([{ name, description }, upstream, transform]) => {
+        //         const code = transform.code;
+        //         const upstreamStreams = upstream.filter(
+        //             (stream) =>
+        //                 stream.id !== this.meta.id &&
+        //                 stream.name !== "New Magic Node"
+        //         );
+        //         const upstreamMeta = upstreamStreams.filter(
+        //             (stream) => stream.type === "meta"
+        //         );
+        //         const upstreamAvailable = upstreamStreams.filter(
+        //             (stream) =>
+        //                 stream.type !== "meta" && stream.type !== "gpt-messages"
+        //         );
 
-        const needRevisedCode$ = this.meta.subject.pipe(
-            filter((e) => e && e.name !== "New Magic Node"),
-            this.debug("needRevisedCode$ meta changed"),
-            withLatestFrom(
-                this.upstream,
-                this.initialCode$,
-                this.metaContextYaml$
-            ),
-            this.debug("meta changed and upstream and initialCode$ changed"),
-            filter(
-                ([meta, upstream, transform]) =>
-                    !(meta.fromStore && transform.fromStore)
-            ),
-            this.debug("needRevisedCode$ check"),
-            map(([{ name, description }, upstream, transform]) => {
-                const code = transform.code;
-                const upstreamStreams = upstream.filter(
-                    (stream) =>
-                        stream.id !== this.meta.id &&
-                        stream.name !== "New Magic Node"
-                );
-                const upstreamMeta = upstreamStreams.filter(
-                    (stream) => stream.type === "meta"
-                );
-                const upstreamAvailable = upstreamStreams.filter(
-                    (stream) =>
-                        stream.type !== "meta" && stream.type !== "gpt-messages"
-                );
+        //         const content = [
+        //             `# Node under review`,
+        //             this.meta.toPromptString(),
+        //             `# Upstream nodes`,
+        //             upstreamMeta.map((stream) => stream.toPromptString()),
+        //             `# Available streams`,
+        //             upstreamAvailable.map((stream) => stream.toPromptString()),
+        //             `# Code under review`,
+        //             `\`\`\`js\n${code}\n\`\`\``,
+        //         ]
+        //             .flat()
+        //             .join("\n");
 
-                const content = [
-                    `# Node under review`,
-                    this.meta.toPromptString(),
-                    `# Upstream nodes`,
-                    upstreamMeta.map((stream) => stream.toPromptString()),
-                    `# Available streams`,
-                    upstreamAvailable.map((stream) => stream.toPromptString()),
-                    `# Code under review`,
-                    `\`\`\`js\n${code}\n\`\`\``,
-                ]
-                    .flat()
-                    .join("\n");
+        //         const messages = [
+        //             {
+        //                 role: "system",
+        //                 content,
+        //             },
+        //         ];
 
-                const messages = [
-                    {
-                        role: "system",
-                        content,
-                    },
-                ];
+        //         return messages;
+        //     }),
+        //     this.questionMap({
+        //         questions: MAGIC_QUESTIONS,
+        //     }),
+        //     this.debug("needRevisedCode$ questionMap"),
+        //     filter((e) => e.answers.filter((a) => a.answer === 2).length),
+        //     this.debug("needRevisedCode$ true"),
+        //     takeUntil(this.nodeRemoved$),
+        //     share()
+        // );
 
-                return messages;
-            }),
-            this.questionMap({
-                questions: MAGIC_QUESTIONS,
-            }),
-            this.debug("needRevisedCode$ questionMap"),
-            filter((e) => e.answers.filter((a) => a.answer === 2).length),
-            this.debug("needRevisedCode$ true"),
-            takeUntil(this.nodeRemoved$),
-            share()
-        );
+        // const needFirstCode$ = combineLatest(
+        //     this.upstream.pipe(this.debug("needFirstCode$ upstream changed")),
+        //     this.meta.subject.pipe(
+        //         this.debug("needFirstCode$ meta changed"),
+        //         filter((e) => e && e.name !== "New Magic Node")
+        //     ),
+        //     this.transformCode$.firstCreation.pipe(
+        //         this.debug("needFirstCode$ firstCreation changed")
+        //     )
+        // ).pipe(tap((e) => console.log("needFirstCode$", this.id, e)));
 
-        const needFirstCode$ = combineLatest(
-            this.upstream.pipe(this.debug("needFirstCode$ upstream changed")),
-            this.meta.subject.pipe(
-                this.debug("needFirstCode$ meta changed"),
-                filter((e) => e && e.name !== "New Magic Node")
-            ),
-            this.transformCode$.firstCreation.pipe(
-                this.debug("needFirstCode$ firstCreation changed")
-            )
-        ).pipe(tap((e) => console.log("needFirstCode$", this.id, e)));
-
-        const needCode$ = merge(needRevisedCode$, needsRedoCode$, this.build$);
+        const needCode$ = merge(this.build$);
 
         needCode$
             .pipe(
@@ -1281,24 +1312,21 @@ export class MagicTransformer extends Transformer {
                     return messages;
                 }),
                 this.chatMap(),
-                tap((e) =>
-                    this.downstream
-                        .pipe(take(1))
-                        .subscribe((streams) =>
-                            streams
-                                .filter(
-                                    (stream) => stream.type === "gpt-messages"
-                                )
-                                .forEach((stream) => stream.subject.next(e))
-                        )
-                ),
                 map((messages) => messages.flat().pop().content),
                 filter((e) => e),
                 map(this.parseSingleCodeBlock),
                 filter((e) => e),
                 takeUntil(this.nodeRemoved$)
             )
-            .subscribe(this.initialCode$);
+            .subscribe(this.transformCode$.subject);
+
+        this.initialCode$ = this.transformCode$.subject.pipe(
+            this.debug("transformCode$ changed"),
+            filter((e) => e && e.code),
+            this.debug("transformCode$ changed"),
+            takeUntil(this.nodeRemoved$),
+            share()
+        );
 
         this.initialCode$
             .pipe(
@@ -1341,6 +1369,36 @@ export class MagicTransformer extends Transformer {
         merge(chatTransformStreams$, this.transformDownstream)
             .pipe(
                 withLatestFrom(chatTransformStreams$, this.transformDownstream),
+                tap(([_, chatStreamOutput, transformStreams$]) => {
+                    if (transformStreams$.length) {
+                        this.downstream
+                            .pipe(take(1), withLatestFrom(this.upstream))
+                            .subscribe(([downStreams, upStreams]) => {
+                                const downChat = downStreams
+                                    .filter(
+                                        (stream) =>
+                                            stream.type === "gpt-messages"
+                                    )
+                                    .pop();
+                                const upChat = upStreams
+                                    .filter(
+                                        (stream) =>
+                                            stream.type === "gpt-messages"
+                                    )
+                                    .pop();
+                                if (downChat && upChat) {
+                                    upChat.subject
+                                        .pipe(
+                                            takeUntil(
+                                                chatTransformStreams$,
+                                                this.transformDownstream
+                                            )
+                                        )
+                                        .subscribe(downChat.subject);
+                                }
+                            });
+                    }
+                }),
                 map(([_, chatStreamOutput, transformStreams$]) => {
                     return [
                         this.meta,
@@ -1355,6 +1413,7 @@ export class MagicTransformer extends Transformer {
     }
 
     autoChain() {
+        // return null;
         this.upstream
             .pipe(
                 this.debug("autoChain upstream changed"),
@@ -1370,7 +1429,15 @@ export class MagicTransformer extends Transformer {
                 distinctUntilChanged((v1, v2) => {
                     const v1Ids = [...v1].map(({ id }) => id).sort();
                     const v2Ids = [...v2].map(({ id }) => id).sort();
-                    return deepEqual(v1Ids, v2Ids);
+                    if (deepEqual(v1Ids, v2Ids)) {
+                        for (const node of v1) {
+                            if (!v2.has(node)) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                    return false;
                 }),
                 scan(
                     (
@@ -1446,6 +1513,7 @@ export class MagicTransformer extends Transformer {
 
     createForm(definition) {
         definition = JSON.parse(JSON.stringify(definition));
+        definition.schema = addDefaultValuesToSchema(definition.schema);
         const onChange = this.createStream({
             ...definition,
             name: definition.name + " onChange",
@@ -1506,12 +1574,23 @@ export class MagicTransformer extends Transformer {
                 );
             }),
             this.debug("rawUpstreams$ combined downstreams"),
-            distinctUntilChanged((v1, v2) =>
-                deepEqual(
-                    v1.map(({ id }) => id).sort(),
-                    v2.map(({ id }) => id).sort()
-                )
-            ),
+            distinctUntilChanged((v1, v2) => {
+                if (
+                    deepEqual(
+                        v1.map(({ id }) => id).sort(),
+                        v2.map(({ id }) => id).sort()
+                    )
+                ) {
+                    for (const node of v1) {
+                        if (!v2.includes(node)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+
+                return false;
+            }),
             this.debug("upstream changed"),
             takeUntil(this.nodeRemoved$),
             shareReplay()

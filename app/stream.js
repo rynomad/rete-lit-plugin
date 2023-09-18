@@ -7,6 +7,7 @@ import {
     concatMap,
     catchError,
     takeUntil,
+    mergeMap,
     BehaviorSubject,
     tap,
 } from "https://esm.sh/rxjs";
@@ -63,7 +64,7 @@ export class Stream {
                 distinctUntilChanged(([_, v1], [__, v2]) => deepEqual(v1, v2)),
                 filter(([queue, value]) => !queue),
                 tap(() => this.queue.next(true)),
-                concatMap(async ([_queue, value]) => {
+                mergeMap(async ([_queue, value]) => {
                     await this.saveToDB(value);
                     return value;
                 }),
@@ -137,23 +138,28 @@ export class Stream {
         let dbVersion = db.version;
 
         if (!db.objectStoreNames.contains(this.id)) {
-            db.close();
+            await db.close();
             dbVersion++;
 
             // Add the operation to the queue
-            Stream.dbOpenQueue = Stream.dbOpenQueue.then(async () => {
-                db = await openDB(Stream.db + "-" + this.type, dbVersion, {
-                    upgrade: (db) => {
-                        db.createObjectStore(this.id, {
-                            autoIncrement: true,
-                        });
-                    },
-                });
+            Stream.dbOpenQueue = Stream.dbOpenQueue.then(async (db) => {
+                db = await openDB(
+                    Stream.db + "-" + this.type,
+                    db ? db.version + 1 : dbVersion,
+                    {
+                        upgrade: (db) => {
+                            db.createObjectStore(this.id, {
+                                autoIncrement: true,
+                            });
+                        },
+                    }
+                );
+                return db;
             });
 
-            // Wait for the operation to complete
-            await Stream.dbOpenQueue;
+            return Stream.dbOpenQueue;
         }
+
         return db;
     }
 

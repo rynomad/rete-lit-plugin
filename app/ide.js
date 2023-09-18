@@ -6,8 +6,8 @@ import { Canvas } from "./canvas.js";
 import { CanvasStore } from "./canvas-store.js";
 import { Transformer } from "./transformer.js";
 // import "./nodes/composite.js";
-import "./nodes/adhoc.js";
-import "./nodes/openai.js";
+// import "./nodes/adhoc.js";
+// import "./nodes/openai.js";
 import "./nodes/magic.js";
 import "./chat.js";
 class IDEElement extends LitElement {
@@ -18,7 +18,7 @@ class IDEElement extends LitElement {
                 height: 100vh;
             }
             .wrapper {
-                display: flex;
+                display: none;
                 opacity: 0;
                 pointer-events: none;
                 transition: opacity 0.5s ease-in-out;
@@ -29,6 +29,7 @@ class IDEElement extends LitElement {
                 pointer-events: all;
                 z-index: 1;
                 flex-grow: 1;
+                display: flex;
             }
             .content {
                 position: relative;
@@ -121,6 +122,9 @@ class IDEElement extends LitElement {
         // Activate the first one if available
         if (this.canvasList.length > 0) {
             await this.attachCanvas(this.canvasList[0], true);
+        } else {
+            await this.addNewCanvas();
+            this.attachCanvas(this.canvasList[0], true);
         }
     }
 
@@ -330,7 +334,6 @@ class IDEElement extends LitElement {
                         <div
                             id="${canvas.canvasId}"
                             class="draggable-pill"
-                            draggable="true"
                             @dragstart="${(e) =>
                                 this.dragStart(
                                     e,

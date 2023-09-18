@@ -254,21 +254,17 @@ export class TransformerNode extends LitPresets.classic.Node {
     constructor() {
         super();
         this.test = Math.random();
+        this.constructedAt = Date.now();
 
-        let prevWidth = 0;
-        let prevHeight = 0;
+        let prevHeight = 209;
 
         this.resizeObserver = new ResizeObserver((entries) => {
             for (let entry of entries) {
                 const newWidth = entry.contentRect.width;
                 const newHeight = entry.contentRect.height;
 
-                if (
-                    Math.abs(newWidth - prevWidth) > 10 ||
-                    Math.abs(newHeight - prevHeight) > 10
-                ) {
+                if (Math.abs(newHeight - prevHeight) > 50) {
                     this.handleResize();
-                    prevWidth = newWidth;
                     prevHeight = newHeight;
                 }
             }
@@ -316,6 +312,7 @@ export class TransformerNode extends LitPresets.classic.Node {
     }
 
     handleResize() {
+        if (Date.now() - this.constructedAt < 10) return;
         this.emit({
             type: "custom-node-resize",
             data: { ...this.data, element: this.element },
@@ -669,6 +666,7 @@ export class Transformer extends Classic.Node {
             type: "custom-node-selected",
             data: this,
         });
+        this.editorNode.requestUpdate();
     }
 
     requestSnapshot() {

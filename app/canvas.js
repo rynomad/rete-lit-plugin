@@ -44,6 +44,7 @@ import {
     switchMap,
     merge,
     map,
+    tap,
     filter,
     withLatestFrom,
 } from "https://esm.sh/rxjs";
@@ -143,7 +144,7 @@ export class Canvas {
 
         AreaExtensions.simpleNodesOrder(area);
 
-        const selector = AreaExtensions.selector();
+        const selector = (this.selector = AreaExtensions.selector());
         const accumulating = AreaExtensions.accumulateOnCtrl();
 
         AreaExtensions.selectableNodes(area, selector, { accumulating });
@@ -223,7 +224,7 @@ export class Canvas {
                         "connectioncreated",
                         "connectionremoved",
                         "custom-node-resize",
-                        "custom-node-selected",
+                        "focus",
                     ].includes(context.type)
                 ),
                 scan((acc, value) => {
@@ -317,7 +318,9 @@ export class Canvas {
         const getNodes = (direction, current) => {
             return Array.from(
                 new Set(
-                    current.map((node) => graph[direction](node.id).nodes())
+                    current
+                        .map((node) => graph[direction](node.id).nodes())
+                        .flat()
                 )
             );
         };
