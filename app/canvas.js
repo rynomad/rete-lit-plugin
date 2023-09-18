@@ -196,7 +196,7 @@ export class Canvas {
         }));
         this.area.use(this.arrange);
 
-        this.store.updates.read.pipe(take(1)).subscribe((nodes) => {
+        this.store.updates.pipe(take(1)).subscribe((nodes) => {
             nodes = this.editor.getNodes();
             AreaExtensions.zoomAt(this.area, nodes);
             const applier = new ArrangeAppliers.TransitionApplier({
@@ -215,7 +215,7 @@ export class Canvas {
 
         merge(this.editorStream, this.areaStream)
             .pipe(
-                withLatestFrom(this.store.updates.read),
+                withLatestFrom(this.store.updates),
                 map(([context, updates]) => context),
                 filter((context) =>
                     [

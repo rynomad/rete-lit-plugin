@@ -38,6 +38,15 @@ export class Stream {
         this._uiSchema = uiSchema;
         this.firstCreation = new Subject();
         this.createIndexedDBSubject();
+
+        if (this.type === "meta") {
+            this.subject
+                .pipe(takeUntil(this.node.nodeRemoved$))
+                .subscribe((value) => {
+                    this.name = value.name;
+                    this.description = value.description;
+                });
+        }
     }
 
     get read() {
@@ -180,10 +189,6 @@ export class Stream {
     }
 
     toPromptString() {
-        if (this.type == "meta") {
-            this.name = this.subject.getValue().name;
-            this.description = this.subject.getValue().description;
-        }
         // return markdown of the stream
         // include: name, description, schema (in code block), id, node.id
         return `## ${this.name}\n\n${this.description}\n\n\n\nStream id: ${

@@ -18,7 +18,7 @@ import {
     timeout,
     of,
     catchError,
-} from "https://esm.sh/rxjs";
+} from "https://esm.sh/rxjs@7.3.0";
 import Ajv from "https://esm.sh/ajv@8.6.2";
 import Swal from "https://esm.sh/sweetalert2@11.1.0";
 import {
@@ -27,7 +27,7 @@ import {
 } from "../dist/rete-litv-plugin.esm.local.js";
 import "./form.js";
 import { getUID } from "./util.js";
-import { Subject, takeUntil } from "https://esm.sh/rxjs";
+import { Subject, takeUntil } from "https://esm.sh/rxjs@7.3.0";
 export class TransformerInput extends Classic.Input {
     constructor(inputConfig) {
         super(
@@ -869,11 +869,12 @@ export class Transformer extends Classic.Node {
     }
 
     hasConnection(label) {
-        return this.editor.connections.some(
-            (c) =>
+        return this.editor.connections.some((c) => {
+            return (
                 c.targetInput === this.socketKey(label) ||
                 c.sourceOutput === this.socketKey(label)
-        );
+            );
+        });
     }
 
     hasInputConnection(label) {

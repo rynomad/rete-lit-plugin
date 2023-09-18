@@ -2,8 +2,8 @@ import { Transformer } from "../transformer.js";
 import { jsonSchema } from "../schemas/json-schema.js";
 import { uiSchema } from "../schemas/ui-schema.js";
 import { SafeSubject as BehaviorSubject } from "../safe-subject.js";
-import * as rxjs from "https://esm.sh/rxjs@7";
-import { map } from "https://esm.sh/rxjs";
+import * as rxjs from "https://esm.sh/rxjs@7.3.0";
+import { map } from "https://esm.sh/rxjs@7.3.0";
 export class AdhocTransformer extends Transformer {
     static inputs = [
         {

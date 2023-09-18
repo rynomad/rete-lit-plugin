@@ -158,7 +158,7 @@ function chatTransform(inputs, stopObservable, errorObservable) {
     formSubject
         .pipe(
             tap((e) => console.log("formSubject", e)),
-            skipUntil(this.canvas.store.updates.read),
+            skipUntil(this.canvas.store.updates),
             filter(
                 (e) =>
                     e?.message?.length > 0 &&
@@ -177,38 +177,49 @@ function chatTransform(inputs, stopObservable, errorObservable) {
             });
             takeUntil(stopObservable);
         });
+
+    const chatMap = this.chatMap({ stream: true });
+
     // Combine the latest form subject values with the gpt-messages
-    combineLatest([formSubject, gptMessages$])
+    combineLatest([
+        formSubject,
+        gptMessages$,
+        this.getInput("Chat GPT").subject.read,
+        this.contextYaml$,
+    ])
         .pipe(
-            tap((e) => console.log("formSubject and gptMessages@", e)),
-            skipUntil(this.canvas.store.updates.read),
-            tap((e) => console.log("formSubject and gptMessages@", e)),
+            this.debug("formSubject and gptMessages@"),
+            skipUntil(this.canvas.store.updates),
             filter(
                 ([value, messages]) =>
                     value.message &&
-                    !(messages.fromStore && value.fromStore) &&
+                    !(
+                        (!messages.length || messages.fromStore) &&
+                        value.fromStore
+                    ) &&
                     !value.message.toLowerCase().startsWith("build me")
             ),
-            tap((e) => console.log("formSubject and gptMessages@", e)),
-            map(([formValue, gptMessages]) => {
+            map(([formValue, gptMessages, config, context]) => {
                 return [
                     ...gptMessages,
                     {
                         role: "user",
                         content: formValue.message,
                     },
-                ];
+                ].concat(
+                    config.context === "yes"
+                        ? { role: "system", content: context }
+                        : []
+                );
             }),
-            tap((e) => console.log("formSubject and gptMessages@", e)),
-
-            this.chatMap({ stream: true }),
+            chatMap,
             takeUntil(stopObservable)
         )
         .subscribe(output.subject);
 
     formSubject
         .pipe(
-            skipUntil(this.canvas.store.updates.read),
+            skipUntil(this.canvas.store.updates),
             tap(async (value) => {
                 if (!this.hasConnection("outputs")) {
                     const nextNode = new MagicTransformer(
@@ -231,6 +242,7 @@ function chatTransform(inputs, stopObservable, errorObservable) {
                     };
                     view.translate(translate.x, translate.y);
                     await this.editor.addConnection(connection);
+                    await new Promise((resolve) => setTimeout(resolve, 100));
                     nextNode.component
                         .querySelector("chat-input")
                         .shadowRoot.querySelector(".editable")
@@ -253,7 +265,6 @@ class MagicElement extends PropagationStopper(LitElement) {
     constructor() {
         super();
     }
-
     connectedCallback() {
         super.connectedCallback();
         // Create a subject specifically for meta
@@ -265,7 +276,7 @@ class MagicElement extends PropagationStopper(LitElement) {
                 map((streamArray) =>
                     streamArray.find(
                         (entry) =>
-                            entry.name === "meta" && entry.node === this.node
+                            entry.type === "meta" && entry.node === this.node
                     )
                 ),
                 filter((meta) => meta !== undefined),
@@ -287,6 +298,8 @@ class MagicElement extends PropagationStopper(LitElement) {
         return html`
             <node-meta-component
                 .subject=${this.metaSubject}></node-meta-component>
+            <chat-input
+                .subject=${this.node.chatInputStream.subject}></chat-input>
             <slot></slot>
             <stream-renderer .stream=${this.node.chatStreams}></stream-renderer>
         `;
@@ -653,14 +666,16 @@ export class MagicTransformer extends Transformer {
 
     chatStreams = new Subject();
 
-    upstream = new BehaviorSubject([this.meta]); // Initialized with meta
+    upstream = new ReplaySubject(1); // Initialized with meta
     downstream = new BehaviorSubject([]);
-    transformFunctions$ = new BehaviorSubject(chatTransform.bind(this));
+    transformFunctions$ = new ReplaySubject(1);
     transformErrors$ = new Subject();
     gpt = new BehaviorSubject(null);
     openaiApi = new BehaviorSubject(null);
     build$ = new Subject();
     streamErrors$ = new Subject();
+    chatError$ = new Subject();
+    transformDownstream = new BehaviorSubject([]);
 
     Swal = Swal;
     Readability = Readability;
@@ -673,7 +688,6 @@ export class MagicTransformer extends Transformer {
         this.cors = this.cors.bind(this);
         this.createStream = this.createStream.bind(this);
         this.createForm = this.createForm.bind(this);
-        this.nodeRemoved$ = new Subject();
         this.setup();
     }
 
@@ -744,10 +758,11 @@ export class MagicTransformer extends Transformer {
             return this.openaiApi.pipe(
                 filter((openai) => !!openai),
                 take(1),
-                withLatestFrom(this.getInput("Chat GPT").subject),
+                withLatestFrom(this.getInput("Chat GPT").subject.read),
                 switchMap(([openai, config]) => {
                     config = JSON.parse(JSON.stringify(config));
                     const mergeStrategy = config.chooser || "single";
+                    delete config.chooser;
                     delete config.mergeStrategy;
                     config.n = config.quantity || 1;
                     delete config.quantity;
@@ -864,7 +879,6 @@ export class MagicTransformer extends Transformer {
                 for await (const part of stream) {
                     const delta = part.choices[0]?.delta?.content || "";
                     content += delta;
-                    console.log(content);
                     outputStream.next(content);
                 }
                 return content;
@@ -898,23 +912,31 @@ export class MagicTransformer extends Transformer {
         return this.upstream.pipe(
             this.debug("upstreamData$ upstream changed"),
             switchMap((upstreamArray) =>
-                combineLatest(
-                    upstreamArray.map((upstreamObject) =>
-                        upstreamObject.subject.pipe(
-                            this.debug(
-                                `upstreamData$ subject changed for ${upstreamObject.name}`
-                            ),
-                            map((data) => ({
-                                id: upstreamObject.id,
-                                nodeId: upstreamObject.node.id,
-                                name: upstreamObject.name,
-                                type: upstreamObject.type,
-                                ignoreContext: upstreamObject.ignoreContext,
-                                description: upstreamObject.description,
-                                data: data,
-                            }))
-                        )
+                merge(
+                    ...upstreamArray.map(
+                        (upstreamObject) => upstreamObject.subject
                     )
+                ).pipe(
+                    withLatestFrom(
+                        ...upstreamArray.map((upstreamObject) =>
+                            upstreamObject.subject.pipe(
+                                this.debug(
+                                    `upstreamData$ subject changed for ${upstreamObject.name}`
+                                ),
+                                map((data) => ({
+                                    id: upstreamObject.id,
+                                    nodeId: upstreamObject.node.id,
+                                    name: upstreamObject.name,
+                                    type: upstreamObject.type,
+                                    ignoreContext: upstreamObject.ignoreContext,
+                                    description: upstreamObject.description,
+                                    schema: upstreamObject.schema,
+                                    data: data,
+                                }))
+                            )
+                        )
+                    ),
+                    map(([_, ...upstreamDataArray]) => upstreamDataArray)
                 )
             ),
             this.debug("upstreamData$ combined latest upstream data"),
@@ -922,7 +944,7 @@ export class MagicTransformer extends Transformer {
         );
     }
 
-    get context$() {
+    get _context$() {
         return this.upstreamData$.pipe(
             this.debug("context$ upstreamData$ changed"),
             map((upstreamData) =>
@@ -957,18 +979,55 @@ export class MagicTransformer extends Transformer {
                 };
             }),
             this.debug("context$ mapped upstream data to nodes"),
-            takeUntil(this.nodeRemoved$)
+            takeUntil(this.nodeRemoved$),
+            shareReplay()
+        );
+    }
+
+    get context$() {
+        return this._context$.pipe(
+            map((obj) => JSON.parse(JSON.stringify(obj))),
+            map((obj) => {
+                obj.upstream.forEach((node) => {
+                    delete node.schema;
+                });
+                return obj;
+            })
+        );
+    }
+
+    get metaContext$() {
+        return this._context$.pipe(
+            map((obj) => JSON.parse(JSON.stringify(obj))),
+            map((obj) => {
+                obj.upstream.forEach((node) => {
+                    delete node.data;
+                });
+                return obj;
+            })
         );
     }
 
     get contextYaml$() {
         return this.context$.pipe(
             map((context) => sanitizeAndRenderYaml(context)),
+            distinctUntilChanged(),
             takeUntil(this.nodeRemoved$)
         );
     }
+
+    get metaContextYaml$() {
+        return this.metaContext$.pipe(
+            map((context) => sanitizeAndRenderYaml(context)),
+            distinctUntilChanged(),
+            takeUntil(this.nodeRemoved$)
+        );
+    }
+
     chatMap() {
+        console.log("chatMap");
         return switchMap((_messages) => {
+            console.log("chatMap switchMap");
             return this.openaiApi.pipe(
                 filter((openai) => !!openai),
                 take(1),
@@ -1038,6 +1097,14 @@ export class MagicTransformer extends Transformer {
         });
     }
 
+    get nodeRemoved$() {
+        return this.canvas.editorStream.pipe(
+            filter((event) => event),
+            filter((event) => event.type === "noderemoved"),
+            filter((event) => event.data.id === this.id)
+        );
+    }
+
     async setup() {
         await this.ready;
         this.transformCode$ = this.createStream({
@@ -1054,14 +1121,18 @@ export class MagicTransformer extends Transformer {
             },
         });
 
-        // Initialize nodeRemoved$ based on editorStream
-        this.canvas.editorStream
-            .pipe(
-                filter((event) => event),
-                filter((event) => event.type === "noderemoved"),
-                filter((event) => event.data.id === this.id)
-            )
-            .subscribe(this.nodeRemoved$);
+        this.chatInputStream = this.createStream({
+            name: "Chat Input",
+            schema: {
+                $schema: "http://json-schema.org/draft-07/schema#",
+                type: "object",
+                properties: {
+                    message: {
+                        type: "string",
+                    },
+                },
+            },
+        });
 
         this.watchUpstreams();
         this.autoChain();
@@ -1094,7 +1165,11 @@ export class MagicTransformer extends Transformer {
         const needRevisedCode$ = this.meta.subject.pipe(
             filter((e) => e && e.name !== "New Magic Node"),
             this.debug("needRevisedCode$ meta changed"),
-            withLatestFrom(this.upstream, this.initialCode$),
+            withLatestFrom(
+                this.upstream,
+                this.initialCode$,
+                this.metaContextYaml$
+            ),
             this.debug("meta changed and upstream and initialCode$ changed"),
             filter(
                 ([meta, upstream, transform]) =>
@@ -1164,9 +1239,13 @@ export class MagicTransformer extends Transformer {
         needCode$
             .pipe(
                 this.debug("needCode$ changed"),
-                withLatestFrom(this.upstream, this.build$),
+                withLatestFrom(
+                    this.upstream,
+                    this.build$,
+                    this.metaContextYaml$
+                ),
                 this.debug("needCode$ with latest from upstream and meta"),
-                map(([_build, upstream, build]) => {
+                map(([_build, upstream, build, metaContext]) => {
                     const upstreamStreams = upstream.filter(
                         (stream) => stream.id !== this.meta.id
                     );
@@ -1182,12 +1261,9 @@ export class MagicTransformer extends Transformer {
                     const content = [
                         `# Node to build`,
                         build.description,
-                        `# Upstream nodes`,
-                        upstreamMeta.map((stream) => stream.toPromptString()),
-                        `# Available streams`,
-                        upstreamAvailable.map((stream) =>
-                            stream.toPromptString()
-                        ),
+                        `# Context`,
+                        `This is the definition of the node you are to build, as well as all upstream nodes and available streams.`,
+                        `\`\`\`yaml\n${metaContext}\n\`\`\``,
                         `# Grading questions`,
                         `Your code must pass the following tests:`,
                         MAGIC_QUESTIONS.map((q) => q.question),
@@ -1228,6 +1304,26 @@ export class MagicTransformer extends Transformer {
             )
             .subscribe(this.transformFunctions$);
 
+        this.upstream
+            .pipe(
+                switchMap(async (upstream) => {
+                    return await chatTransform.bind(this)(
+                        upstream,
+                        this.nodeRemoved$,
+                        this.chatError$
+                    );
+                }),
+                withLatestFrom(this.transformDownstream),
+                map(([chatStreamOutput, transformStreams$]) => {
+                    return [
+                        this.meta,
+                        ...chatStreamOutput,
+                        ...transformStreams$,
+                    ];
+                }),
+                takeUntil(this.nodeRemoved$)
+            )
+            .subscribe(this.downstream);
         // this.downstream.pipe(skip(2)).subscribe(() => this.requestSnapshot());
     }
 
@@ -1315,34 +1411,10 @@ export class MagicTransformer extends Transformer {
     }
 
     createChatInput() {
-        const chatInputStream = this.createStream({
-            name: "Chat Input",
-            schema: {
-                $schema: "http://json-schema.org/draft-07/schema#",
-                type: "object",
-                properties: {
-                    message: {
-                        type: "string",
-                    },
-                },
-            },
-        });
-        const chatInput = document.createElement("chat-input");
-        chatInput.subject = chatInputStream.subject.pipe(
+        return this.chatInputStream.subject.pipe(
             filter((e) => e?.message),
             shareReplay()
         );
-        chatInput.handleFocus = () => {
-            this.selected = true;
-            this.editorNode.requestUpdate();
-        };
-        chatInput.handleBlur = () => {
-            this.selected = false;
-            this.editorNode.requestUpdate();
-        };
-
-        this.component.replaceChildren(chatInput);
-        return chatInput.subject;
     }
 
     createForm(definition) {
@@ -1418,11 +1490,12 @@ export class MagicTransformer extends Transformer {
             shareReplay()
         );
 
-        const lastUpstream = new ReplaySubject(1);
+        const lastUpstream = new BehaviorSubject([this.meta]);
         rawUpstreams$.subscribe(lastUpstream);
 
-        this.canvas.store.updates.read
+        this.canvas.store.updates
             .pipe(
+                debounceTime(100),
                 take(1), // Take only the first emission from b$
                 switchMap(() =>
                     concat(
@@ -1430,30 +1503,34 @@ export class MagicTransformer extends Transformer {
                         rawUpstreams$ // Then emit all values from a$
                     )
                 ),
+
                 filter((streams) => {
-                    const minStreams = Math.max(
-                        2,
-                        (streams.filter((stream) => stream.type === "meta")
-                            .length -
-                            1) *
-                            2
-                    );
-                    // console.log(
-                    //     "upstream filter,",
-                    //     !this.hasConnection("inputs"),
-                    //     minStreams,
-                    //     streams.length
-                    // );
                     if (!this.hasConnection("inputs")) {
-                        // we're loaded but not connected to anything, so we're ready
                         return true;
+                    }
+                    const nonSelf = streams.filter(
+                        (stream) => stream.node !== this
+                    );
+
+                    const upstreamNodes = Array.from(
+                        new Set(nonSelf.map((stream) => stream.node))
+                    );
+
+                    if (!upstreamNodes.length) {
+                        return false;
                     }
 
-                    // we need at least one stream from each upstream node other than ourselves.
-                    // this should be more thorough.
-                    if (streams.length >= minStreams) {
-                        return true;
+                    for (const node of upstreamNodes) {
+                        if (
+                            nonSelf.filter((stream) => stream.node === node)
+                                .length < 2
+                        ) {
+                            // must have meta and gpt-messages
+                            return false;
+                        }
                     }
+
+                    return true;
                 }),
                 this.debug("upstream filter passed"),
                 takeUntil(this.nodeRemoved$)
@@ -1464,7 +1541,7 @@ export class MagicTransformer extends Transformer {
     applyTransforms() {
         combineLatest([this.upstream, this.transformFunctions$])
             .pipe(
-                this.debug("upstream and transformFunctions$ changed"),
+                this.debug("apply transforms"),
                 switchMap(async ([streams, transform]) => {
                     // Create a new stop signal for this run
                     const currentTransformStop$ = new Subject();
@@ -1563,11 +1640,11 @@ export class MagicTransformer extends Transformer {
                         (stream) =>
                             stream.chainable && !transformed.includes(stream)
                     );
-                    return [this.meta, ...transformed, ...chainables];
+                    return [...transformed, ...chainables];
                 }),
                 takeUntil(this.nodeRemoved$)
             )
-            .subscribe(this.downstream);
+            .subscribe(this.transformDownstream);
     }
 
     parseSingleCodeBlock(markdown) {

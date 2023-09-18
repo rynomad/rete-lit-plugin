@@ -1,5 +1,5 @@
 import { LitElement, html, css } from "https://esm.sh/lit@2.0.2";
-import { BehaviorSubject, filter } from "https://esm.sh/rxjs@7.4.0";
+import { BehaviorSubject, filter } from "https://esm.sh/rxjs@7.3.0";
 
 export class MetadataComponent extends LitElement {
     static get properties() {

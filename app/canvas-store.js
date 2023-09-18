@@ -8,6 +8,7 @@ import {
     merge,
     withLatestFrom,
     map,
+    ReplaySubject,
 } from "https://esm.sh/rxjs@7.3.0";
 import { openDB } from "https://esm.sh/idb@6.0.0";
 import { deepEqual } from "https://esm.sh/fast-equals";
@@ -48,8 +49,8 @@ export class CanvasStore {
         this.historyOffset = new BehaviorSubject(0);
         this.db = this.constructor.db;
         this.getDB = this.constructor.getDB.bind(this);
-        this.snapshots = new SafeSubject(true);
-        this.updates = new SafeSubject(true);
+        this.snapshots = new ReplaySubject(1);
+        this.updates = new ReplaySubject(1);
 
         // Initialize the state manager
         this.init();
@@ -72,7 +73,7 @@ export class CanvasStore {
                 tap(() => this.lock.next(false))
                 // tap(() => console.log("SPAM?"))
             )
-            .subscribe(this.snapshots.write);
+            .subscribe(this.snapshots);
 
         await this.setMetadata({
             canvasId: this.canvas.canvasId,
@@ -131,7 +132,7 @@ export class CanvasStore {
         const nodes = this.editor.getNodes().map((node) => node.serialize());
         const connections = this.editor.getConnections();
         await this.saveSnapshotToDB({ nodes, connections });
-        this.snapshots.write.next({ nodes, connections });
+        this.snapshots.next({ nodes, connections });
     }
 
     async setMetadata(metadata) {

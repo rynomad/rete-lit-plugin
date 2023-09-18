@@ -179,7 +179,7 @@ class IDEElement extends LitElement {
             }
         }
 
-        this.onPointerEnterSidebar();
+        // this.onPointerEnterSidebar();
     }
 
     async updateCanvasName(canvasId, newName) {
@@ -323,7 +323,7 @@ class IDEElement extends LitElement {
 
     render() {
         return html`
-            <div class="sidebar" @pointerenter="${this.onPointerEnterSidebar}">
+            <div class="sidebar">
                 <div class="plus-button" @click="${this.addNewCanvas}">+</div>
                 ${this.canvasList.map(
                     (canvas) => html`
