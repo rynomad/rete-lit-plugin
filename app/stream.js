@@ -142,22 +142,21 @@ export class Stream {
             dbVersion++;
 
             // Add the operation to the queue
-            Stream.dbOpenQueue = Stream.dbOpenQueue.then(async (db) => {
-                db = await openDB(
-                    Stream.db + "-" + this.type,
-                    db ? db.version + 1 : dbVersion,
-                    {
-                        upgrade: (db) => {
+            Stream.dbOpenQueue = Stream.dbOpenQueue.then(async () => {
+                db = await openDB(Stream.db + "-" + this.type, dbVersion, {
+                    upgrade: (db) => {
+                        if (!db.objectStoreNames.contains(this.id)) {
                             db.createObjectStore(this.id, {
                                 autoIncrement: true,
                             });
-                        },
-                    }
-                );
+                        }
+                    },
+                });
                 return db;
             });
 
-            return Stream.dbOpenQueue;
+            // Wait for the queue to finish before returning the db
+            db = await Stream.dbOpenQueue;
         }
 
         return db;

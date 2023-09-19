@@ -174,9 +174,15 @@ function chatTransform(inputs, stopObservable, errorObservable) {
     const chatMap = this.chatMap({ stream: true });
 
     // Combine the latest form subject values with the gpt-messages
-    combineLatest([formSubject, gptMessages$, this.contextYaml$])
+    combineLatest([
+        formSubject.pipe(this.debug("formSubject")),
+        gptMessages$.pipe(this.debug("gptMessages$")),
+        // this.contextYaml$.pipe(this.debug("contextYaml$")),
+    ])
         .pipe(
-            withLatestFrom(this.getInput("Chat GPT").subject.read),
+            withLatestFrom(
+                this.getInput("Chat GPT").subject.read.pipe(filter((e) => e))
+            ),
             map(([[formValue, gptMessages, context], config]) => [
                 formValue,
                 gptMessages,
@@ -216,7 +222,7 @@ function chatTransform(inputs, stopObservable, errorObservable) {
                     },
                 ].concat(
                     config.context === "yes"
-                        ? { role: "system", content: context }
+                        ? { role: "system", content: context || "no context" }
                         : []
                 );
             }),
@@ -1053,7 +1059,7 @@ export class MagicTransformer extends Transformer {
 
     chatMap() {
         console.log("chatMap");
-        return switchMap((_messages) => {
+        return switchMap((messages) => {
             console.log("chatMap switchMap");
             return this.openaiApi.pipe(
                 filter((openai) => !!openai),
@@ -1064,26 +1070,7 @@ export class MagicTransformer extends Transformer {
                     )
                 ),
                 switchMap(([openai, config]) => {
-                    let start = from([]);
-                    if (config.context === "yes") {
-                        start = this.upstream;
-                    }
-
-                    return start.pipe(
-                        switchMap((upstream) => {
-                            let messages = _messages;
-                            config = JSON.parse(JSON.stringify(config));
-                            try {
-                                return this.chatCall(
-                                    { ...config, messages },
-                                    openai
-                                );
-                            } catch (error) {
-                                // Handle synchronous errors if any
-                                return throwError(error);
-                            }
-                        })
-                    );
+                    return this.chatCall({ ...config, messages }, openai);
                 }),
                 catchError((error) => {
                     // Handle API errors here
